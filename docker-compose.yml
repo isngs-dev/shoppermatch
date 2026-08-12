@@ -1,0 +1,46 @@
+# ShopperMatch.AI — one command full-stack demo:  docker compose up --build
+# Then open http://localhost:8000
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shoppermatch
+      POSTGRES_PASSWORD: shoppermatch
+      POSTGRES_DB: shoppermatch
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shoppermatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://shoppermatch:shoppermatch@db:5432/shoppermatch
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      AUTO_SEED: ${AUTO_SEED:-true}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mock}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-ISN Shopper Recruitment}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-recruitment@isn-demo.example}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      DEMO_ADMIN_EMAIL: ${DEMO_ADMIN_EMAIL:-admin@isn.com}
+      DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-isn-demo-2026}
+    ports:
+      - "${APP_PORT:-8000}:8000"
+
+volumes:
+  pgdata:

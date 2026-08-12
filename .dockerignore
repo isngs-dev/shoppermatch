@@ -1,0 +1,13 @@
+# Build artifacts / deps that should never enter the build context
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+**/.venv
+**/venv
+**/.pytest_cache
+**/*.db
+**/.env
+.git
+.gitignore
+*.md

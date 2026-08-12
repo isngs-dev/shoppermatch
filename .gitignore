@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.db
+*.sqlite3
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Env & secrets
+.env
+backend/.env
+frontend/.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Claude Code local settings — can contain permission-rule entries that
+# capture command text verbatim, including bearer tokens from ad-hoc curl
+# calls during a session. Only settings.json (checked in) is meant to be shared.
+.claude/settings.local.json
+
+# Runtime logs / build artifacts — regenerate, don't commit.
+backend/uvicorn.out.log
+backend/uvicorn.err.log
+ngrok.log
+backend/static/
