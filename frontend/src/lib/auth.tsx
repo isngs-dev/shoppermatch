@@ -7,19 +7,25 @@ import {
 } from "react";
 import { api, clearToken, getToken, setToken } from "./api";
 
-type User = { id: string; name: string; email: string; role: string };
+type User = { id: string; name: string; email: string; role: string; client_id?: string | null; client_name?: string | null };
 
 type AuthContextValue = {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<User>;
+  register: (body: { company_name: string; contact_name: string; email: string; password: string }) => Promise<User>;
   logout: () => void;
 };
 
 const AuthContext = createContext<AuthContextValue>({
   user: null,
   loading: true,
-  login: async () => {},
+  login: async () => {
+    throw new Error("AuthProvider not mounted");
+  },
+  register: async () => {
+    throw new Error("AuthProvider not mounted");
+  },
   logout: () => {},
 });
 
@@ -53,6 +59,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await api.login(email, password);
     setToken(res.access_token);
     setUser(res.user);
+    return res.user as User;
+  }
+
+  async function register(body: { company_name: string; contact_name: string; email: string; password: string }) {
+    const res = await api.register(body);
+    setToken(res.access_token);
+    setUser(res.user);
+    return res.user as User;
   }
 
   function logout() {
@@ -61,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
       {children}
     </AuthContext.Provider>
   );

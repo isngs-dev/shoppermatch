@@ -19,11 +19,12 @@ export function ShopperInvite() {
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [showInfo, setShowInfo] = useState(false);
   const [localResponse, setLocalResponse] = useState<string | null>(null);
+  const [note, setNote] = useState("");
 
   async function respond(response: "accepted" | "declined") {
     setSubmitting(response);
     try {
-      const res = await api.respond(token, response);
+      const res = await api.respond(token, response, note.trim() || undefined);
       setLocalResponse(res.response || response);
       reload();
     } catch {
@@ -126,6 +127,17 @@ export function ShopperInvite() {
               </div>
             ) : (
               <div className="mt-7 space-y-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">
+                    Any comments? (optional)
+                  </label>
+                  <textarea
+                    className="input h-16 resize-none text-sm"
+                    placeholder="e.g. Great timing, or let us know why this isn't a fit right now…"
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                  />
+                </div>
                 <div className="flex flex-col gap-3 sm:flex-row">
                   <button
                     className="btn-primary flex-1 py-3 text-base"

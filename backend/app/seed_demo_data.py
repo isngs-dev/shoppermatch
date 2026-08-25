@@ -428,6 +428,171 @@ async def _build_completed(session, existing: set[str]) -> list[Campaign]:
     return [c for c, _ in created]
 
 
+# --------------------------------------------------------------------------- #
+# 50-shopper cohort (task: "MASTER TASK: CREATE 50-SHOPPER SQL DATABASE").
+#
+# The database already had 21 shoppers with their own varied demo emails
+# before this task. Per the task's own instruction ("if existing records
+# are not suitable ... create separate clearly-marked demo shopper records
+# rather than modifying unrelated ... records"), those 21 are left exactly
+# as they are. This adds the 29 new shoppers needed to reach 50 total,
+# using stable shopper_code identifiers (demo-shopper-001..029) so re-runs
+# UPDATE rather than duplicate, and alternating between exactly the two
+# specified test-inbox addresses across this new cohort.
+# --------------------------------------------------------------------------- #
+# Every shopper in the database — the 21 pre-existing rows and this 29-shopper
+# cohort alike — uses this single controlled test inbox (explicit override:
+# the user confirmed no alternating, one address for all 50).
+SINGLE_TEST_EMAIL = "vinithshetty96@gmail.com"
+
+CITY_INFO = {
+    "Mumbai": {"state": "Maharashtra", "coords": (19.0760, 72.8777), "pincode": "400001", "languages": ["English", "Hindi", "Marathi"]},
+    "Pune": {"state": "Maharashtra", "coords": (18.5204, 73.8567), "pincode": "411001", "languages": ["English", "Hindi", "Marathi"]},
+    "Nashik": {"state": "Maharashtra", "coords": (19.9975, 73.7898), "pincode": "422001", "languages": ["English", "Hindi", "Marathi"]},
+    "Thane": {"state": "Maharashtra", "coords": (19.2183, 72.9781), "pincode": "400601", "languages": ["English", "Hindi", "Marathi"]},
+    "Navi Mumbai": {"state": "Maharashtra", "coords": (19.0330, 73.0297), "pincode": "400614", "languages": ["English", "Hindi", "Marathi"]},
+    "Bangalore": {"state": "Karnataka", "coords": (12.9716, 77.5946), "pincode": "560001", "languages": ["English", "Hindi", "Kannada"]},
+    "Delhi": {"state": "Delhi", "coords": (28.7041, 77.1025), "pincode": "110001", "languages": ["English", "Hindi"]},
+    "Gurgaon": {"state": "Haryana", "coords": (28.4595, 77.0266), "pincode": "122001", "languages": ["English", "Hindi"]},
+    "Hyderabad": {"state": "Telangana", "coords": (17.3850, 78.4867), "pincode": "500001", "languages": ["English", "Hindi", "Telugu"]},
+    "Chennai": {"state": "Tamil Nadu", "coords": (13.0827, 80.2707), "pincode": "600001", "languages": ["English", "Tamil", "Hindi"]},
+    "Ahmedabad": {"state": "Gujarat", "coords": (23.0225, 72.5714), "pincode": "380001", "languages": ["English", "Hindi", "Gujarati"]},
+    "Kolkata": {"state": "West Bengal", "coords": (22.5726, 88.3639), "pincode": "700001", "languages": ["English", "Hindi", "Bengali"]},
+    "Jaipur": {"state": "Rajasthan", "coords": (26.9124, 75.7873), "pincode": "302001", "languages": ["English", "Hindi"]},
+    "Indore": {"state": "Madhya Pradesh", "coords": (22.7196, 75.8577), "pincode": "452001", "languages": ["English", "Hindi"]},
+    "Nagpur": {"state": "Maharashtra", "coords": (21.1458, 79.0882), "pincode": "440001", "languages": ["English", "Hindi", "Marathi"]},
+}
+
+CATEGORY_POOL = [
+    "Retail", "Fashion", "Electronics", "Grocery", "Food & Beverage", "Banking",
+    "Automotive", "Hospitality", "Telecom", "Healthcare", "Beauty", "E-commerce",
+]
+SKILL_POOL = [
+    "Report Writing", "Photo Documentation", "Attention to Detail", "Time Management",
+    "Customer Interaction", "Data Accuracy", "Covert Observation", "Written Communication",
+]
+CERT_POOL = ["Mystery Shopping Certified", "Retail Audit Certified", "Customer Experience Certified"]
+CLIENT_POOL = ["Nike", "Starbucks", "Croma", "Apple", "Adidas", "Reliance Digital", "McDonald's", "Amazon"]
+
+# (name, city, gender, age, category_pair)
+SHOPPER_COHORT = [
+    ("Sneha Desai", "Mumbai", "Female", 27, ("Retail", "Fashion")),
+    ("Rohan Malhotra", "Delhi", "Male", 31, ("Electronics", "Telecom")),
+    ("Neha Shah", "Ahmedabad", "Female", 24, ("Fashion", "Beauty")),
+    ("Karan Joshi", "Pune", "Male", 29, ("Automotive", "Retail")),
+    ("Meera Iyer", "Chennai", "Female", 35, ("Food & Beverage", "Hospitality")),
+    ("Ananya Patel", "Ahmedabad", "Female", 26, ("Retail", "E-commerce")),
+    ("Rahul Mehta", "Mumbai", "Male", 33, ("Electronics", "Retail")),
+    ("Pooja Nair", "Bangalore", "Female", 28, ("Healthcare", "Retail")),
+    ("Aditya Rao", "Hyderabad", "Male", 30, ("Banking", "E-commerce")),
+    ("Kavya Reddy", "Hyderabad", "Female", 25, ("Fashion", "Beauty")),
+    ("Siddharth Bhatt", "Jaipur", "Male", 37, ("Automotive", "Electronics")),
+    ("Ritu Agarwal", "Delhi", "Female", 32, ("Banking", "Retail")),
+    ("Varun Chopra", "Gurgaon", "Male", 29, ("Telecom", "Electronics")),
+    ("Divya Menon", "Chennai", "Female", 26, ("Hospitality", "Food & Beverage")),
+    ("Manish Kulkarni", "Pune", "Male", 34, ("Grocery", "Retail")),
+    ("Anjali Bose", "Kolkata", "Female", 29, ("Fashion", "Retail")),
+    ("Kunal Saxena", "Indore", "Male", 27, ("Electronics", "Telecom")),
+    ("Ishita Mukherjee", "Kolkata", "Female", 31, ("Healthcare", "Beauty")),
+    ("Gaurav Pillai", "Navi Mumbai", "Male", 36, ("Automotive", "Retail")),
+    ("Tanvi Rathod", "Nashik", "Female", 24, ("Food & Beverage", "Grocery")),
+    ("Nikhil Choudhary", "Jaipur", "Male", 28, ("Banking", "E-commerce")),
+    ("Riya Kapoor", "Delhi", "Female", 23, ("Fashion", "E-commerce")),
+    ("Aryan Bhalla", "Gurgaon", "Male", 26, ("Electronics", "Retail")),
+    ("Shreya Ghosh", "Kolkata", "Female", 30, ("Hospitality", "Retail")),
+    ("Vivek Trivedi", "Nagpur", "Male", 38, ("Automotive", "Grocery")),
+    ("Pallavi Deshpande", "Nagpur", "Female", 27, ("Retail", "Beauty")),
+    ("Harsh Vora", "Ahmedabad", "Male", 25, ("Telecom", "Electronics")),
+    ("Sanya Kulshreshtha", "Indore", "Female", 33, ("Banking", "Healthcare")),
+    ("Yash Thakkar", "Thane", "Male", 29, ("E-commerce", "Retail")),
+]
+
+
+def _pick(pool: list[str], seed_offset: int, count: int) -> list[str]:
+    r = random.Random(1000 + seed_offset)
+    return r.sample(pool, min(count, len(pool)))
+
+
+async def _build_shopper_cohort(session) -> list[str]:
+    existing_codes = set(
+        (await session.execute(select(Shopper.shopper_code))).scalars().all()
+    )
+    created: list[str] = []
+
+    for i, (name, city, gender, age, cats) in enumerate(SHOPPER_COHORT, start=1):
+        code = f"demo-shopper-{i:03d}"
+        if code in existing_codes:
+            continue  # idempotent: never duplicate on re-run
+
+        info = CITY_INFO[city]
+        lat, lon = info["coords"]
+        r = random.Random(2000 + i)
+
+        email = SINGLE_TEST_EMAIL
+        # ~80% available / ~13% limited / ~7% unavailable across this cohort
+        # (roughly matches the task's requested spread once combined with
+        # the 21 pre-existing shoppers, which already skew heavily available).
+        if i % 5 == 0:
+            availability = "unavailable" if i % 10 == 0 else "limited"
+        else:
+            availability = "available"
+
+        categories = list(cats)
+        skills = _pick(SKILL_POOL, i, 3)
+        certifications = _pick(CERT_POOL, i, 1) if i % 3 != 0 else []  # not everyone certified
+        previous_clients = _pick(CLIENT_POOL, i + 50, r.randint(0, 3))
+        years_exp = round(r.uniform(0, 10), 1)
+        prev_assignments = r.randint(0, 40)
+        completion_rate = round(r.uniform(0.60, 1.0), 3)
+        rating = round(r.uniform(3.0, 5.0), 1)
+        preferred_distance = round(r.uniform(5, 50), 1)
+
+        client_bit = f" Previous client work includes {', '.join(previous_clients)}." if previous_clients else ""
+        experience_description = (
+            f"Mystery shopper based in {city} with {years_exp:.0f} year"
+            f"{'s' if years_exp != 1 else ''} of experience in {categories[0].lower()}"
+            f"{' and ' + categories[1].lower() if len(categories) > 1 else ''} audits. "
+            f"Completed {prev_assignments} assignments to date, focused on "
+            f"{r.choice(['store presentation', 'staff interaction quality', 'compliance checks', 'service speed and accuracy'])}."
+            f"{client_bit}"
+        )
+
+        shopper = Shopper(
+            shopper_code=code,
+            name=name,
+            email=email,
+            phone=f"+91 {r.randint(70000, 99999)}{r.randint(10000, 99999)}",
+            city=city,
+            state=info["state"],
+            zip_code=info["pincode"],
+            latitude=lat + r.uniform(-0.03, 0.03),
+            longitude=lon + r.uniform(-0.03, 0.03),
+            categories=categories,
+            availability_status=availability,
+            source="ISN Demo Cohort",
+            rating=rating,
+            completion_rate=completion_rate,
+            previous_assignments=prev_assignments,
+            active=True,
+            gender=gender,
+            age=age,
+            pincode=info["pincode"],
+            skills=skills,
+            experience_description=experience_description,
+            years_experience=years_exp,
+            preferred_distance_km=preferred_distance,
+            preferred_locations=[city],
+            preferred_categories=categories,
+            languages=info["languages"],
+            certifications=certifications,
+            previous_clients=previous_clients,
+        )
+        session.add(shopper)
+        created.append(code)
+
+    return created
+
+
 async def run() -> None:
     await init_models()
     async with AsyncSessionLocal() as session:
@@ -437,10 +602,21 @@ async def run() -> None:
         # upcoming pass just added (defensive; names don't overlap today).
         existing2 = await _existing_campaign_names(session)
         completed_created = await _build_completed(session, existing2)
+        shoppers_created = await _build_shopper_cohort(session)
+        # Explicit override: every shopper in the database — pre-existing
+        # rows included — uses this single controlled test inbox, not just
+        # the newly-seeded cohort. Safe/idempotent: a plain UPDATE, re-running
+        # it just re-asserts the same value.
+        all_shoppers = (await session.execute(select(Shopper))).scalars().all()
+        retargeted = sum(1 for s in all_shoppers if s.email != SINGLE_TEST_EMAIL)
+        for s in all_shoppers:
+            s.email = SINGLE_TEST_EMAIL
         await session.commit()
 
     print(f"Upcoming campaigns created: {[c.name for c in upcoming_created] or 'none (already present)'}")
     print(f"Completed campaigns created: {[c.name for c in completed_created] or 'none (already present)'}")
+    print(f"Demo shoppers created: {len(shoppers_created)} ({shoppers_created[:3]}{'...' if len(shoppers_created) > 3 else ''})")
+    print(f"Shopper emails retargeted to {SINGLE_TEST_EMAIL}: {retargeted} (of {len(all_shoppers)} total)")
 
 
 if __name__ == "__main__":

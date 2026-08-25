@@ -7,11 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..database import get_session
-from ..deps import get_current_user
+from ..deps import require_admin
 from ..models import AuditLog, Shopper, User
 from ..serializers import audit_out
 from ..services.analytics import compute_summary
 from ..services.insights import generate_insights
+from ..services.outbox import sent_count_last_24h
 
 router = APIRouter(prefix="/api", tags=["Insights & Admin"])
 
@@ -20,7 +21,7 @@ router = APIRouter(prefix="/api", tags=["Insights & Admin"])
 async def audit_logs(
     limit: int = Query(default=100, ge=1, le=1000),
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ):
     stmt = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)
     logs = (await session.execute(stmt)).scalars().all()
@@ -30,7 +31,7 @@ async def audit_logs(
 @router.get("/insights")
 async def insights(
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ):
     summary = await compute_summary(session)
     rows = (
@@ -48,54 +49,13 @@ async def insights(
     }
 
 
-@router.get("/integrations")
-async def integrations(_: User = Depends(get_current_user)):
-    return {
-        "items": [
-            {
-                "key": "sassie",
-                "name": "SASSIE",
-                "category": "Data Source",
-                "status": "connected",
-                "detail": "Shopper roster & shop definitions (synthetic demo feed).",
-            },
-            {
-                "key": "postgres",
-                "name": "PostgreSQL",
-                "category": "Database",
-                "status": "connected" if not settings.is_sqlite else "fallback",
-                "detail": "Primary datastore"
-                + (" (SQLite fallback active for local demo)." if settings.is_sqlite else "."),
-            },
-            {
-                "key": "email",
-                "name": "SendGrid" if settings.email_provider == "sendgrid" else "Mock Email Provider",
-                "category": "Email Delivery",
-                "status": "connected"
-                if settings.email_provider == "sendgrid" and settings.sendgrid_api_key
-                else "demo",
-                "detail": "Set EMAIL_PROVIDER=sendgrid + SENDGRID_API_KEY to send real email.",
-            },
-            {
-                "key": "redis",
-                "name": "Redis",
-                "category": "Queue / Cache",
-                "status": "optional",
-                "detail": "Optional background/event processing. Not required for the demo.",
-            },
-            {
-                "key": "neo4j",
-                "name": "Neo4j",
-                "category": "Graph",
-                "status": "planned",
-                "detail": "Future-ready: SHOPPER/SHOP/CAMPAIGN relationships map cleanly to a graph.",
-            },
-        ]
-    }
+# Integration management (SASSIE, Email, SMS, Google Maps, AI) moved to
+# routers/integrations.py — real DB-backed config/status/test/sync, not this
+# hardcoded list.
 
 
 @router.get("/settings")
-async def get_settings_endpoint(_: User = Depends(get_current_user)):
+async def get_settings_endpoint(_: User = Depends(require_admin)):
     """Non-secret configuration surfaced to the admin UI."""
     return {
         "app_name": settings.app_name,
@@ -107,4 +67,8 @@ async def get_settings_endpoint(_: User = Depends(get_current_user)):
         "database": "postgresql" if not settings.is_sqlite else "sqlite (local fallback)",
         "tracking_rate_limit_per_minute": settings.tracking_rate_limit_per_minute,
         "cors_origins": settings.cors_origin_list,
+        "bulk_email_batch_size": settings.bulk_email_batch_size,
+        "bulk_email_daily_limit": settings.bulk_email_daily_limit,
+        "bulk_email_batch_delay_seconds": settings.bulk_email_batch_delay_seconds,
+        "emails_sent_last_24h": await sent_count_last_24h(),
     }

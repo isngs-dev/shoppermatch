@@ -1,0 +1,37 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "shoppermatch-backend",
+      "runtimeExecutable": "C:\\Users\\iSN-037\\Desktop\\demo tracker\\backend\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "--app-dir", "C:\\Users\\iSN-037\\Desktop\\demo tracker\\backend", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
+      "port": 8000,
+      "autoPort": false
+    },
+    {
+      "name": "shoppermatch-frontend",
+      "runtimeExecutable": "C:\\PROGRA~1\\nodejs\\npm.cmd",
+      "runtimeArgs": ["run", "dev", "--prefix", "C:\\Users\\iSN-037\\Desktop\\demo tracker\\frontend"],
+      "port": 5173
+    },
+    {
+      "name": "netlify-deploy-preview",
+      "runtimeExecutable": "C:\\Users\\iSN-037\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "runtimeArgs": ["-m", "http.server", "8792", "--directory", "C:\\Users\\iSN-037\\Desktop\\demo tracker\\netlify_deploy"],
+      "port": 8792
+    },
+    {
+      "name": "fcrs-frontend",
+      "runtimeExecutable": "C:\\PROGRA~1\\nodejs\\npm.cmd",
+      "runtimeArgs": ["run", "dev", "--prefix", "C:\\Users\\iSN-037\\Desktop\\fcrs_landing_page-main\\fcrs_landing_page-main\\frontend"],
+      "port": 4321
+    },
+    {
+      "name": "shoppermatch-ngrok-tunnel",
+      "runtimeExecutable": "ngrok",
+      "runtimeArgs": ["http", "8000", "--domain=grasp-snowbound-schilling.ngrok-free.dev"],
+      "port": 4040,
+      "url": "http://127.0.0.1:4040"
+    }
+  ]
+}

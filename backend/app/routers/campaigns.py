@@ -8,19 +8,22 @@ mapping so the list endpoint and the KPI/insight helpers never disagree.
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..database import get_session
-from ..deps import get_current_user
+from ..deps import require_operator
 from ..models import Campaign, EventType, Invitation, Shop, Shopper, User
 from ..serializers import campaign_out, invitation_row, shop_out, shopper_out
 from ..services.audit import record_audit
+from ..services.selection import enforce_over_selection
 from ..services.semantic_matching import MATCHING_WEIGHTS, run_matching
+from ..services.tenancy import enforce_campaign_access
 from ..services.tracking import add_event
 from .invitations import _slug, next_reference
 
@@ -106,22 +109,22 @@ def _start_date(campaign: Campaign) -> str | None:
     return iso(min(starts))
 
 
-async def _require_campaign(session: AsyncSession, campaign_id: uuid.UUID) -> Campaign:
+async def _require_campaign(session: AsyncSession, campaign_id: uuid.UUID, user: User) -> Campaign:
     campaign = await session.get(Campaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    return campaign
+    return enforce_campaign_access(campaign, user)
 
 
 @router.get("")
 async def list_campaigns(
     status: str | None = Query(default=None, description="active | upcoming | completed | cancelled"),
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     stmt = select(Campaign).order_by(Campaign.created_at.desc()).options(
         selectinload(Campaign.shops)
     )
+    if user.role == "client":
+        stmt = stmt.where(Campaign.client_id == user.client_id)
     campaigns = (await session.execute(stmt)).scalars().all()
     out = []
     for c in campaigns:
@@ -138,18 +141,62 @@ async def list_campaigns(
     return {"items": out, "total": len(out)}
 
 
+class BulkStatusRequest(BaseModel):
+    campaign_ids: list[str] = Field(min_length=1)
+    status: Literal["active", "upcoming", "completed", "cancelled"]
+
+
+@router.post("/bulk/status")
+async def bulk_update_status(
+    body: BulkStatusRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    """Bulk archive/status change for the Client Portal's multi-select
+    campaign toolbar. Never deletes anything — just moves campaigns between
+    the active/upcoming/completed/cancelled buckets, same as editing one
+    campaign's status by hand would."""
+    updated: list[dict] = []
+    errors: list[dict] = []
+    for raw_id in body.campaign_ids:
+        try:
+            campaign_id = uuid.UUID(raw_id)
+        except ValueError:
+            errors.append({"campaign_id": raw_id, "error": "Invalid campaign id"})
+            continue
+        campaign = await session.get(Campaign, campaign_id)
+        try:
+            campaign = enforce_campaign_access(campaign, user)
+        except HTTPException as exc:
+            errors.append({"campaign_id": raw_id, "error": exc.detail})
+            continue
+        old_status = campaign.status
+        campaign.status = body.status
+        updated.append({"campaign_id": raw_id, "name": campaign.name, "old_status": old_status, "new_status": body.status})
+        await record_audit(
+            session,
+            action="campaign.bulk_status_change",
+            actor=user.email,
+            entity_type="campaign",
+            entity_id=raw_id,
+            summary=f"{campaign.name} status changed: {old_status} → {body.status}",
+            meta={"bulk": True, "count": len(body.campaign_ids)},
+        )
+    await session.commit()
+    return {"updated": updated, "errors": errors}
+
+
 @router.get("/{campaign_id}")
 async def get_campaign(
     campaign_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     stmt = select(Campaign).where(Campaign.id == campaign_id).options(
         selectinload(Campaign.shops)
     )
     campaign = (await session.execute(stmt)).scalar_one_or_none()
-    if campaign is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+    campaign = enforce_campaign_access(campaign, user)
     data = campaign_out(campaign, shops=list(campaign.shops))
     data["bucket"] = status_bucket(campaign.status)
     data["start_date"] = _start_date(campaign)
@@ -162,20 +209,73 @@ async def get_campaign(
 async def campaign_shops(
     campaign_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
-    await _require_campaign(session, campaign_id)
+    await _require_campaign(session, campaign_id, user)
     items = await _campaign_shops_with_coverage(session, campaign_id)
     return {"items": items, "total": len(items)}
+
+
+@router.get("/{campaign_id}/map")
+async def campaign_map(
+    campaign_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    """Shop markers for the Campaign Overview map. Required/Invited/Accepted
+    come from real invitation rows (grouped counts, same source as the Shops
+    tab); Available reuses `run_matching`'s `eligible_count` — the exact same
+    hard-filter pipeline the Recommendations tab uses — so this never
+    invents a second definition of "eligible"."""
+    campaign = await _require_campaign(session, campaign_id, user)
+    shops = (await session.execute(select(Shop).where(Shop.campaign_id == campaign_id))).scalars().all()
+    shoppers = list((await session.execute(select(Shopper))).scalars().all())
+
+    invited_counts = dict(
+        (
+            await session.execute(
+                select(Invitation.shop_id, func.count(Invitation.id))
+                .where(Invitation.campaign_id == campaign_id)
+                .group_by(Invitation.shop_id)
+            )
+        ).all()
+    )
+    accepted_counts = dict(
+        (
+            await session.execute(
+                select(Invitation.shop_id, func.count(Invitation.id))
+                .where(Invitation.campaign_id == campaign_id, Invitation.response == "accepted")
+                .group_by(Invitation.shop_id)
+            )
+        ).all()
+    )
+
+    items = []
+    for s in shops:
+        d = shop_out(s)
+        invited = int(invited_counts.get(s.id, 0))
+        accepted = int(accepted_counts.get(s.id, 0))
+        ratio = (invited / s.required_shoppers) if s.required_shoppers else 0
+        d["invited_shoppers"] = invited
+        d["accepted_shoppers"] = accepted
+        d["coverage"] = "healthy" if ratio >= 1 else ("medium" if ratio >= 0.5 else "low")
+        d["available_shoppers"] = run_matching(shoppers, s, campaign)["eligible_count"]
+        items.append(d)
+
+    return {
+        "campaign": {"id": str(campaign.id), "name": campaign.name, "deadline": campaign_out(campaign).get("deadline")},
+        "items": items,
+        "total": len(items),
+    }
 
 
 @router.get("/{campaign_id}/shoppers")
 async def campaign_shoppers(
     campaign_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
-    await _require_campaign(session, campaign_id)
+    await _require_campaign(session, campaign_id, user)
     stmt = (
         select(Invitation)
         .where(Invitation.campaign_id == campaign_id)
@@ -199,9 +299,9 @@ async def campaign_shoppers(
 async def campaign_outreach_endpoint(
     campaign_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
-    await _require_campaign(session, campaign_id)
+    await _require_campaign(session, campaign_id, user)
     return await _campaign_outreach(session, campaign_id)
 
 
@@ -209,9 +309,9 @@ async def campaign_outreach_endpoint(
 async def campaign_tracking(
     campaign_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
-    await _require_campaign(session, campaign_id)
+    await _require_campaign(session, campaign_id, user)
     stmt = (
         select(Invitation)
         .where(Invitation.campaign_id == campaign_id)
@@ -221,6 +321,7 @@ async def campaign_tracking(
             selectinload(Invitation.shop),
             selectinload(Invitation.shopper),
             selectinload(Invitation.email_job),
+            selectinload(Invitation.automation),
         )
     )
     invitations = (await session.execute(stmt)).scalars().all()
@@ -231,9 +332,9 @@ async def campaign_tracking(
 async def campaign_insights(
     campaign_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
-    await _require_campaign(session, campaign_id)
+    await _require_campaign(session, campaign_id, user)
     shops = await _campaign_shops_with_coverage(session, campaign_id)
     outreach = await _campaign_outreach(session, campaign_id)
 
@@ -296,15 +397,17 @@ async def ai_shop_recommendations(
     radius: float | None = Query(default=None, ge=0, description="Max distance in km"),
     min_score: int = Query(default=0, ge=0, le=100),
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
-    campaign = await _require_campaign(session, campaign_id)
+    campaign = await _require_campaign(session, campaign_id, user)
     shop = await session.get(Shop, shop_id)
     if shop is None or shop.campaign_id != campaign_id:
         raise HTTPException(status_code=404, detail="Shop not found in this campaign")
 
     shoppers = (await session.execute(select(Shopper))).scalars().all()
-    result = run_matching(list(shoppers), shop, campaign, radius_km=radius)
+    parsed = (campaign.parsed_requirements or {}).get("parsed_fields", {}) if campaign.parsed_requirements else {}
+    effective_radius = radius if radius is not None else parsed.get("maximum_distance_km")
+    result = run_matching(list(shoppers), shop, campaign, radius_km=effective_radius, requirements=parsed)
 
     recs = [r for r in result["recommendations"] if r["match_score"] >= min_score][:limit]
 
@@ -358,18 +461,19 @@ async def approve_ai_recommendations(
     shop_id: uuid.UUID,
     body: ApproveRecommendationsRequest,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     """Turn approved AI recommendations into real, trackable invitations —
     the same Invitation model + UUID tracking the rest of the app uses, so
     they immediately show up in Outreach and Tracking. Invitations are
     created but not auto-sent; sending stays an explicit Outreach action."""
-    campaign = await _require_campaign(session, campaign_id)
+    campaign = await _require_campaign(session, campaign_id, user)
     shop = await session.get(Shop, shop_id)
     if shop is None or shop.campaign_id != campaign_id:
         raise HTTPException(status_code=404, detail="Shop not found in this campaign")
     if not body.shopper_ids:
         raise HTTPException(status_code=400, detail="No shoppers selected")
+    await enforce_over_selection(session, shop, len(body.shopper_ids))
 
     created = []
     for sid in body.shopper_ids:

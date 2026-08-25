@@ -4,41 +4,40 @@ import { useAuth } from "../lib/auth";
 import { classNames } from "../lib/format";
 import { useTheme } from "../lib/theme";
 import {
-  IconCampaign,
   IconClipboard,
   IconDashboard,
+  IconHistory,
   IconLightbulb,
   IconLogout,
   IconMenu,
   IconMoon,
   IconPlug,
-  IconSend,
   IconSettings,
-  IconSparkles,
-  IconStore,
   IconSun,
   IconTarget,
   IconUsers,
   IconX,
 } from "./Icons";
+import { NotificationsBell } from "./NotificationsBell";
 import { Avatar, Logo } from "./ui";
+import { VoiceAssistant } from "./VoiceAssistant";
 
 type NavItem = { to: string; label: string; icon: (p: any) => ReactNode };
 
+// Campaigns/Shops/Shoppers/Recommendations/Outreach + their AI features now
+// live exclusively in the Client Portal — ISN Admin keeps system-level
+// oversight only (monitoring, attribution, integrations, audit).
 const PRIMARY: NavItem[] = [
-  { to: "/dashboard", label: "Dashboard", icon: IconDashboard },
-  { to: "/campaigns", label: "Campaigns", icon: IconCampaign },
-  { to: "/shops", label: "Shops", icon: IconStore },
-  { to: "/shoppers", label: "Shoppers", icon: IconUsers },
-  { to: "/recommendations", label: "Recommendations", icon: IconSparkles },
-  { to: "/outreach", label: "Outreach", icon: IconSend },
-  { to: "/tracking", label: "Tracking", icon: IconTarget },
+  { to: "/admin/dashboard", label: "Dashboard", icon: IconDashboard },
+  { to: "/admin/tracking", label: "Tracking", icon: IconTarget },
 ];
 const SECONDARY: NavItem[] = [
-  { to: "/insights", label: "Insights", icon: IconLightbulb },
-  { to: "/audit-logs", label: "Audit Logs", icon: IconClipboard },
-  { to: "/integrations", label: "Integrations", icon: IconPlug },
-  { to: "/settings", label: "Settings", icon: IconSettings },
+  { to: "/admin/insights", label: "Insights", icon: IconLightbulb },
+  { to: "/admin/users", label: "Users", icon: IconUsers },
+  { to: "/admin/client-activity", label: "Client Activity", icon: IconHistory },
+  { to: "/admin/audit-logs", label: "Audit Logs", icon: IconClipboard },
+  { to: "/admin/integrations", label: "Integrations", icon: IconPlug },
+  { to: "/admin/settings", label: "Settings", icon: IconSettings },
 ];
 
 const ALL_NAV = [...PRIMARY, ...SECONDARY];
@@ -130,6 +129,7 @@ export function AdminLayout() {
           </button>
           <h1 className="text-lg font-semibold text-slate-900 dark:text-white">{title}</h1>
           <div className="ml-auto flex items-center gap-2">
+            <NotificationsBell />
             <button className="btn-ghost" onClick={toggle} aria-label="Toggle theme">
               {theme === "dark" ? <IconSun /> : <IconMoon />}
             </button>
@@ -152,6 +152,8 @@ export function AdminLayout() {
           <Outlet />
         </main>
       </div>
+
+      <VoiceAssistant />
     </div>
   );
 }

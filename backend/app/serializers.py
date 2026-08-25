@@ -16,8 +16,10 @@ from .models import (
     Invitation,
     InvitationEvent,
     EmailJob,
+    IntegrationConfig,
     Shop,
     Shopper,
+    SyncLog,
     User,
 )
 
@@ -71,6 +73,8 @@ def user_out(user: User) -> dict:
         "name": user.name,
         "email": user.email,
         "role": user.role,
+        "client_id": str(user.client_id) if user.client_id else None,
+        "client_name": user.client.company_name if user.client_id and user.client else None,
     }
 
 
@@ -94,6 +98,18 @@ def shopper_out(s: Shopper) -> dict:
         "previous_assignments": s.previous_assignments,
         "active": s.active,
         "created_at": iso(s.created_at),
+        "gender": s.gender,
+        "age": s.age,
+        "pincode": s.pincode,
+        "skills": s.skills or [],
+        "experience_description": s.experience_description,
+        "years_experience": s.years_experience,
+        "preferred_distance_km": s.preferred_distance_km,
+        "preferred_locations": s.preferred_locations or [],
+        "preferred_categories": s.preferred_categories or [],
+        "languages": s.languages or [],
+        "certifications": s.certifications or [],
+        "previous_clients": s.previous_clients or [],
     }
 
 
@@ -114,6 +130,7 @@ def shop_out(shop: Shop) -> dict:
         "visit_start": iso(shop.visit_start),
         "visit_end": iso(shop.visit_end),
         "status": shop.status,
+        "allow_over_selection": shop.allow_over_selection,
     }
 
 
@@ -154,17 +171,23 @@ def invitation_row(inv: Invitation) -> dict:
         "shopper_name": inv.shopper.name if inv.shopper else None,
         "shopper_email": inv.email,
         "campaign_name": inv.campaign.name if inv.campaign else None,
+        "client_name": inv.campaign.client_name if inv.campaign else None,
         "shop_name": inv.shop.shop_name if inv.shop else None,
+        "shop_city": inv.shop.city if inv.shop else None,
         "status": inv.status,
         "source": inv.source,
         "sent_at": iso(inv.sent_at),
         "delivered_at": iso(inv.delivered_at),
         "opened_at": iso(inv.opened_at),
         "clicked_at": iso(inv.clicked_at),
+        "visited_at": iso(inv.visited_at),
         "responded_at": iso(inv.responded_at),
         "response": inv.response,
         "created_at": iso(inv.created_at),
         "email_delivery": email_job_out(inv.email_job) if inv.email_job else None,
+        "automation_id": str(inv.automation_id) if inv.automation_id else None,
+        "automation_name": inv.automation.name if inv.automation_id and inv.automation else None,
+        "automation_step": inv.automation_step,
     }
 
 
@@ -189,13 +212,19 @@ def invitation_detail(inv: Invitation) -> dict:
                 "shopper_url": shopper_url(inv.tracking_token),
             },
             "attribution": {
-                "attributed": True,
+                # Only claim attribution when the unique tracking link was
+                # actually used — never assumed from an email being merely
+                # sent or opened (open tracking is a weak, provider-side
+                # signal; a real click is the proof).
+                "attributed": inv.clicked_at is not None,
+                "channel": "ISN_EMAIL",
                 "source": inv.source,
                 "campaign": inv.campaign.name if inv.campaign else None,
                 "invitation_id": inv.reference,
                 "tracking_token_masked": mask_token(inv.tracking_token),
                 "landing_page": "ShopperMatch.AI",
                 "first_click": iso(inv.clicked_at),
+                "visited": iso(inv.visited_at),
                 "response": inv.response,
             },
             "events": [event_out(e) for e in inv.events],
@@ -261,4 +290,39 @@ def audit_out(a: AuditLog) -> dict:
         "summary": a.summary,
         "created_at": iso(a.created_at),
         "meta": a.meta or {},
+    }
+
+
+def integration_out(cfg: IntegrationConfig) -> dict:
+    """`secret_config` is deliberately never included here — this is the
+    only place integration data is turned into an API response."""
+    return {
+        "id": str(cfg.id),
+        "provider": cfg.provider,
+        "display_name": cfg.display_name,
+        "status": cfg.status,
+        "enabled": cfg.enabled,
+        "configuration": cfg.configuration or {},
+        "has_secrets": bool(cfg.secret_config),
+        "last_tested_at": iso(cfg.last_tested_at),
+        "last_sync_at": iso(cfg.last_sync_at),
+        "last_error": cfg.last_error,
+        "created_at": iso(cfg.created_at),
+        "updated_at": iso(cfg.updated_at),
+    }
+
+
+def sync_log_out(log: SyncLog) -> dict:
+    return {
+        "id": str(log.id),
+        "provider": log.provider,
+        "status": log.status,
+        "started_at": iso(log.started_at),
+        "completed_at": iso(log.completed_at),
+        "campaigns": {"fetched": log.campaigns_fetched, "created": log.campaigns_created, "updated": log.campaigns_updated},
+        "shops": {"fetched": log.shops_fetched, "created": log.shops_created, "updated": log.shops_updated},
+        "shoppers": {"fetched": log.shoppers_fetched, "created": log.shoppers_created, "updated": log.shoppers_updated},
+        "errors": log.errors or [],
+        "error_message": log.error_message,
+        "created_at": iso(log.created_at),
     }

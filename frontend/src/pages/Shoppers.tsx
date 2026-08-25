@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ShopperDrawer } from "../components/ShopperDrawer";
 import { Avatar, Badge, Loading } from "../components/ui";
 import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
@@ -14,6 +15,7 @@ const AVAIL_CLASS: Record<string, string> = {
 export function Shoppers() {
   const [q, setQ] = useState("");
   const [availability, setAvailability] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const { data, loading, error, reload } = useApi(
     () => api.shoppers(q, availability),
     [q, availability]
@@ -57,7 +59,11 @@ export function Shoppers() {
             </thead>
             <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
               {data.items.map((s: any) => (
-                <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                <tr
+                  key={s.id}
+                  className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                  onClick={() => setSelectedId(s.id)}
+                >
                   <td className="td">
                     <div className="flex items-center gap-3">
                       <Avatar name={s.name} />
@@ -101,6 +107,8 @@ export function Shoppers() {
           </table>
         </div>
       )}
+
+      {selectedId && <ShopperDrawer shopperId={selectedId} onClose={() => setSelectedId(null)} />}
     </div>
   );
 }

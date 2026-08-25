@@ -19,6 +19,10 @@ export function Settings() {
     ["From address", data.email_from],
     ["Tracking rate limit", `${data.tracking_rate_limit_per_minute} / min per client`],
     ["CORS origins", (data.cors_origins || []).join(", ")],
+    ["Bulk email batch size", `${data.bulk_email_batch_size} sends`],
+    ["Bulk email daily limit", `${data.bulk_email_daily_limit} sends / 24h`],
+    ["Bulk email batch delay", `${data.bulk_email_batch_delay_seconds}s between batches`],
+    ["Emails sent (last 24h)", `${data.emails_sent_last_24h} / ${data.bulk_email_daily_limit}`],
   ];
 
   return (

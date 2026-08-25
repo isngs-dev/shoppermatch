@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_session
-from ..deps import get_current_user
+from ..deps import require_operator
 from ..models import EmailTemplate, User
 from ..serializers import iso
 
@@ -46,7 +46,7 @@ def _out(t: EmailTemplate) -> dict:
 @router.get("")
 async def list_templates(
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_operator),
 ):
     stmt = select(EmailTemplate).order_by(EmailTemplate.updated_at.desc())
     templates = (await session.execute(stmt)).scalars().all()
@@ -57,7 +57,7 @@ async def list_templates(
 async def create_template(
     body: EmailTemplateIn,
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_operator),
 ):
     t = EmailTemplate(name=body.name, subject=body.subject, html_body=body.html_body, active=body.active)
     session.add(t)
@@ -70,7 +70,7 @@ async def update_template(
     template_id: uuid.UUID,
     body: EmailTemplateUpdate,
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_operator),
 ):
     t = await session.get(EmailTemplate, template_id)
     if t is None:
@@ -87,7 +87,7 @@ async def update_template(
 async def duplicate_template(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_operator),
 ):
     t = await session.get(EmailTemplate, template_id)
     if t is None:
@@ -102,7 +102,7 @@ async def duplicate_template(
 async def delete_template(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_operator),
 ):
     t = await session.get(EmailTemplate, template_id)
     if t is None:

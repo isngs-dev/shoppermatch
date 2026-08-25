@@ -23,13 +23,14 @@ from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..database import get_session
-from ..deps import get_current_user
+from ..deps import require_admin
 from ..models import Invitation, InvitationEvent, User
 from ..rate_limit import tracking_limiter
 from ..schemas import RespondRequest
 from ..serializers import iso, invitation_row, public_invitation
 from ..services.analytics import compute_summary
-from ..services.tracking import mark_clicked, mark_opened, mark_response
+from ..services.audit import record_audit
+from ..services.tracking import mark_clicked, mark_opened, mark_response, mark_visited
 
 router = APIRouter(tags=["Tracking"])
 
@@ -113,10 +114,14 @@ async def click_redirect(
 
     token = _parse_token(tracking_token)
     if token is None:
+        await record_audit(session, action="tracking.invalid_token", summary="Malformed tracking token on /r/{token}", meta={"raw": tracking_token[:64]})
+        await session.commit()
         raise HTTPException(status_code=404, detail="Invalid tracking token")
 
     inv = await _get_by_token(session, token)
     if inv is None:
+        await record_audit(session, action="tracking.invalid_token", summary="Tracking token not found on /r/{token}", meta={"token": tracking_token})
+        await session.commit()
         raise HTTPException(status_code=404, detail="Invitation not found")
 
     metadata = {
@@ -199,14 +204,29 @@ async def sample_invitation(session: AsyncSession = Depends(get_session)):
 @router.get("/api/public/invitations/{tracking_token}")
 async def public_landing(
     tracking_token: str,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ):
+    """Called when the assignment page itself actually loads — the VISITED
+    signal, deliberately separate from the CLICKED redirect (a click can
+    happen without the page ever finishing load; this confirms it did)."""
     token = _parse_token(tracking_token)
     if token is None:
         raise HTTPException(status_code=404, detail="Invalid tracking token")
     inv = await _get_by_token(session, token)
     if inv is None:
         raise HTTPException(status_code=404, detail="Invitation not found")
+
+    await mark_visited(
+        session,
+        inv,
+        {
+            "source": inv.source,
+            "page": "assignment_page",
+            "user_agent_summary": _summarize_user_agent(request.headers.get("user-agent")),
+        },
+    )
+    await session.commit()
     return public_invitation(inv)
 
 
@@ -220,9 +240,13 @@ async def respond(
 ):
     token = _parse_token(tracking_token)
     if token is None:
+        await record_audit(session, action="tracking.invalid_token", summary="Malformed tracking token on /respond", meta={"raw": tracking_token[:64]})
+        await session.commit()
         raise HTTPException(status_code=404, detail="Invalid tracking token")
     inv = await _get_by_token(session, token)
     if inv is None:
+        await record_audit(session, action="tracking.invalid_token", summary="Tracking token not found on /respond", meta={"token": tracking_token})
+        await session.commit()
         raise HTTPException(status_code=404, detail="Invitation not found")
 
     metadata = {
@@ -234,6 +258,16 @@ async def respond(
         metadata["note"] = body.note
 
     recorded = await mark_response(session, inv, body.response, metadata)
+    if recorded:
+        await record_audit(
+            session,
+            actor="shopper",
+            action=f"assignment.{body.response}",
+            entity_type="invitation",
+            entity_id=str(inv.id),
+            summary=f"{inv.shopper.name if inv.shopper else 'Shopper'} {body.response} {inv.reference} ({inv.campaign.name if inv.campaign else ''})",
+            meta={"campaign_id": str(inv.campaign_id), "shop_id": str(inv.shop_id), "shopper_id": str(inv.shopper_id)},
+        )
     await session.commit()
 
     payload = public_invitation(inv)
@@ -246,7 +280,7 @@ async def respond(
 @router.get("/api/tracking/summary", tags=["Analytics"])
 async def tracking_summary(
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ):
     return await compute_summary(session)
 
@@ -257,7 +291,7 @@ async def tracking_events(
     event_type: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ):
     stmt = (
         select(InvitationEvent)

@@ -185,3 +185,16 @@ export const IconShield = (p: P) => (
     <path d="M9 12l2 2 4-4" />
   </svg>
 );
+export const IconBell = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M6 10a6 6 0 0 1 12 0c0 4 1.5 5.5 2 6H4c0.5-0.5 2-2 2-6z" />
+    <path d="M10 20a2 2 0 0 0 4 0" />
+  </svg>
+);
+export const IconHistory = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 7.5V12l3 2" />
+    <path d="M3.5 9L2 7.5M3.5 9L5 7.5M3.5 9V5.5" />
+  </svg>
+);

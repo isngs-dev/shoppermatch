@@ -113,6 +113,11 @@ def build_shopper_profile_text(shopper: Shopper) -> str:
         " ".join(shopper.categories or []),
         shopper.availability_status or "",
         shopper.source or "",
+        " ".join(shopper.skills or []),
+        shopper.experience_description or "",
+        " ".join(shopper.certifications or []),
+        " ".join(shopper.previous_clients or []),
+        " ".join(shopper.languages or []),
     ]
     return " ".join(p for p in parts if p)
 
@@ -143,8 +148,23 @@ def _category_overlap_fraction(shopper: Shopper, shop: Shop) -> float:
     return 0.25
 
 
+def _client_experience_fraction(shopper: Shopper, campaign: Campaign) -> tuple[float, str | None]:
+    """Real previous-client matching (Shopper.previous_clients vs
+    Campaign.client_name) — no longer a flat neutral placeholder now that
+    the field actually exists. Returns (fraction, matched_client_name)."""
+    clients = [c for c in (shopper.previous_clients or []) if c]
+    if not clients:
+        return 0.3, None  # no history recorded — mild, honest penalty
+    campaign_client = (campaign.client_name or "").lower()
+    for c in clients:
+        cl = c.lower()
+        if campaign_client and (campaign_client in cl or cl in campaign_client):
+            return 1.0, c
+    return 0.5, None  # has prior-client experience, just not with this client
+
+
 def score_shopper(
-    shopper: Shopper, shop: Shop, requirement_vec: Counter
+    shopper: Shopper, shop: Shop, campaign: Campaign, requirement_vec: Counter
 ) -> dict:
     # Semantic similarity
     profile_vec = embed(build_shopper_profile_text(shopper))
@@ -159,9 +179,7 @@ def score_shopper(
     availability_fraction = _availability_fraction(shopper.availability_status)
     completion_fraction = max(0.0, min(1.0, shopper.completion_rate or 0.0))
     rating_fraction = max(0.0, min(1.0, (shopper.rating or 0.0) / 5.0))
-    # No previous-client field exists on the Shopper model — neutral score,
-    # never a fabricated positive/negative claim.
-    client_fraction = 0.5
+    client_fraction, matched_client = _client_experience_fraction(shopper, campaign)
 
     factors = [
         ("semantic_similarity", "Semantic Requirement Match", sim),
@@ -205,19 +223,44 @@ def score_shopper(
         reasons.append(f"{shopper.rating:.1f} rating")
     if shopper.previous_assignments:
         reasons.append(f"{shopper.previous_assignments} previous assignments")
+    if matched_client:
+        reasons.append(f"Previous {matched_client} experience")
     status = (shopper.availability_status or "").lower()
     reasons.append("Available now" if status == "available" else f"Availability: {shopper.availability_status}")
+
+    # Confidence: how much real signal backs this score, separate from the
+    # score itself — a high match_score built on missing distance and zero
+    # assignment history is not the same as one built on complete data
+    # (spec section 25: "never pretend the AI is certain when the
+    # underlying data is weak").
+    data_points = sum([
+        distance_known,
+        shopper.previous_assignments >= 3,
+        bool(shopper.rating),
+        bool(shopper.completion_rate),
+        bool(shopper.previous_clients),
+    ])
+    if data_points >= 4:
+        confidence = "High"
+    elif data_points >= 2:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
 
     return {
         "shopper_id": str(shopper.id),
         "name": shopper.name,
         "match_score": score,
         "classification": classification,
+        "confidence": confidence,
         "distance_km": round(distance_km, 1) if distance_known else None,
+        "latitude": shopper.latitude,
+        "longitude": shopper.longitude,
         "availability": shopper.availability_status,
         "rating": round(shopper.rating, 2) if shopper.rating else None,
         "completion_rate": round(shopper.completion_rate, 3) if shopper.completion_rate is not None else None,
         "previous_assignments": shopper.previous_assignments,
+        "previous_client_match": matched_client,
         "categories": shopper.categories or [],
         "city": shopper.city,
         "state": shopper.state,
@@ -231,18 +274,32 @@ def run_matching(
     shop: Shop,
     campaign: Campaign,
     radius_km: float | None = None,
+    requirements: dict | None = None,
 ) -> dict:
     """Full pipeline: normalize requirement → embed → score every active,
     available candidate → rank. Nothing here is randomly generated — every
-    candidate comes from the existing shopper table."""
+    candidate comes from the existing shopper table.
+
+    `requirements` (optional) is the structured output of
+    services/ai/requirement_parser.py — when present, its fields become
+    additional Stage 1 hard filters (min rating, min completion, required
+    categories) applied *before* scoring, on top of the always-on
+    active/available/radius filters. This is the "hard filter then
+    semantic rank" two-stage pipeline the AI spec calls for."""
     requirement_text = build_requirement_text(campaign, shop)
     requirement_vec = embed(requirement_text)
+    requirements = requirements or {}
+
+    min_rating = requirements.get("minimum_rating")
+    min_completion = requirements.get("minimum_completion_rate")
+    required_categories = [c.lower() for c in requirements.get("categories", [])]
 
     total_candidates = len(shoppers)
     scored: list[dict] = []
     excluded_inactive = 0
     excluded_unavailable = 0
     excluded_radius = 0
+    excluded_requirements = 0
 
     for s in shoppers:
         if not s.active:
@@ -251,7 +308,19 @@ def run_matching(
         if (s.availability_status or "").lower() == "unavailable":
             excluded_unavailable += 1
             continue
-        row = score_shopper(s, shop, requirement_vec)
+        if min_rating is not None and (s.rating or 0) < min_rating:
+            excluded_requirements += 1
+            continue
+        if min_completion is not None and (s.completion_rate or 0) < min_completion:
+            excluded_requirements += 1
+            continue
+        if required_categories:
+            shopper_cats = [c.lower() for c in (s.categories or [])]
+            if not any(rc in shopper_cats for rc in required_categories):
+                excluded_requirements += 1
+                continue
+
+        row = score_shopper(s, shop, campaign, requirement_vec)
         if radius_km is not None and row["distance_km"] is not None and row["distance_km"] > radius_km:
             excluded_radius += 1
             continue
@@ -268,6 +337,7 @@ def run_matching(
             "inactive": excluded_inactive,
             "unavailable": excluded_unavailable,
             "outside_radius": excluded_radius,
+            "requirements_not_met": excluded_requirements,
         },
         "classification_counts": {
             "top_match": counts.get("TOP_MATCH", 0),

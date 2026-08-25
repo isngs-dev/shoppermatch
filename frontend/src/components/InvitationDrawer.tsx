@@ -3,7 +3,7 @@ import { IconX } from "./Icons";
 import { Timeline } from "./Timeline";
 import { Badge, CopyButton, Loading } from "./ui";
 import { api } from "../lib/api";
-import { fmtDateTime, statusBadgeClass } from "../lib/format";
+import { fmtDateTime, fmtDuration, statusBadgeClass } from "../lib/format";
 import { useApi } from "../lib/useApi";
 
 export function InvitationDrawer({
@@ -14,6 +14,11 @@ export function InvitationDrawer({
   onClose: () => void;
 }) {
   const { data, loading } = useApi(() => api.invitation(invitationId), [invitationId]);
+  // preview=true so viewing this in the drawer never counts as a real
+  // shopper open — same real subject/body/links the shopper actually got,
+  // rendered as an email rather than a raw-link list (spec: show the client
+  // what was actually sent, for every invitation in the history).
+  const emailPreview = useApi(() => api.previewEmail(invitationId, true), [invitationId]);
 
   return (
     <div className="fixed inset-0 z-50">
@@ -49,13 +54,40 @@ export function InvitationDrawer({
               </div>
 
               <div className="grid grid-cols-2 gap-3 text-sm">
+                <Field label="Client" value={data.client_name} />
                 <Field label="Campaign" value={data.campaign_name} />
                 <Field label="Shop" value={data.shop_name} />
                 <Field label="Sent" value={fmtDateTime(data.sent_at)} />
                 <Field label="Delivered" value={fmtDateTime(data.delivered_at)} />
                 <Field label="Opened" value={fmtDateTime(data.opened_at)} />
                 <Field label="Clicked" value={fmtDateTime(data.clicked_at)} />
+                <Field label="Visited" value={fmtDateTime(data.visited_at)} />
               </div>
+
+              {(fmtDuration(data.sent_at, data.clicked_at) || fmtDuration(data.clicked_at, data.responded_at)) && (
+                <div className="grid grid-cols-2 gap-3">
+                  {fmtDuration(data.sent_at, data.clicked_at) && (
+                    <div className="rounded-lg bg-slate-50 p-3 text-center dark:bg-slate-800/50">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                        Email Sent → Click
+                      </div>
+                      <div className="mt-1 font-bold text-slate-800 dark:text-slate-100">
+                        {fmtDuration(data.sent_at, data.clicked_at)}
+                      </div>
+                    </div>
+                  )}
+                  {fmtDuration(data.clicked_at, data.responded_at) && (
+                    <div className="rounded-lg bg-slate-50 p-3 text-center dark:bg-slate-800/50">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                        Click → {data.response === "declined" ? "Decline" : "Accept"}
+                      </div>
+                      <div className="mt-1 font-bold text-slate-800 dark:text-slate-100">
+                        {fmtDuration(data.clicked_at, data.responded_at)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {data.email_delivery && (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-800/50">
@@ -70,12 +102,45 @@ export function InvitationDrawer({
               <AttributionCard attribution={data.attribution} />
 
               <div className="space-y-2">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Tracked URLs
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Email Preview
+                  </div>
+                  {emailPreview.data?.subject && (
+                    <CopyButton value={data.urls.tracking_url} label="Copy tracking link" />
+                  )}
                 </div>
-                <UrlRow label="Tracking (click)" value={data.urls.tracking_url} />
-                <UrlRow label="Shopper landing" value={data.urls.shopper_url} />
-                <UrlRow label="Open pixel" value={data.urls.pixel_url} />
+                {emailPreview.data?.subject && (
+                  <div className="truncate rounded-t-lg border border-b-0 border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-800 dark:bg-slate-800/50">
+                    <span className="text-slate-400">Subject: </span>
+                    <span className="font-medium text-slate-700 dark:text-slate-200">{emailPreview.data.subject}</span>
+                  </div>
+                )}
+                {emailPreview.loading && !emailPreview.data ? (
+                  <div className="rounded-lg border border-slate-200 p-6 text-center text-sm text-slate-400 dark:border-slate-800">
+                    Rendering the email as it was sent…
+                  </div>
+                ) : emailPreview.data?.html ? (
+                  <iframe
+                    title="Email preview"
+                    // This is a read-only preview, not a live email — the
+                    // sandbox already blocks scripts/forms, but a plain link
+                    // click still navigates the iframe's own frame away from
+                    // the preview. Disabling pointer-events on links (via a
+                    // trailing <style>, which works even with scripts
+                    // sandboxed) keeps clicking "View Assignment" etc. inert.
+                    srcDoc={emailPreview.data.html + "<style>a{pointer-events:none!important;cursor:default!important;}</style>"}
+                    sandbox=""
+                    className={
+                      "h-[420px] w-full border border-slate-200 bg-white dark:border-slate-800" +
+                      (emailPreview.data.subject ? " rounded-b-lg" : " rounded-lg")
+                    }
+                  />
+                ) : (
+                  <div className="rounded-lg border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400 dark:border-slate-800">
+                    No preview available for this invitation.
+                  </div>
+                )}
               </div>
 
               <div>
@@ -97,18 +162,6 @@ function Field({ label, value }: { label: string; value?: string | null }) {
     <div>
       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
       <div className="text-slate-800 dark:text-slate-200">{value || "—"}</div>
-    </div>
-  );
-}
-
-function UrlRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-800/50">
-        <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
-        <div className="truncate font-mono text-xs text-slate-600 dark:text-slate-300">{value}</div>
-      </div>
-      <CopyButton value={value} label="" />
     </div>
   );
 }

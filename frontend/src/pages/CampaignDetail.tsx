@@ -2,15 +2,24 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Funnel } from "../components/Funnel";
 import { InvitationDrawer } from "../components/InvitationDrawer";
-import { IconSparkles } from "../components/Icons";
+import { ShopperDrawer } from "../components/ShopperDrawer";
+import { CampaignMapTab, ShopDetailDrawer } from "../components/ShopMap";
+import { IconClock, IconMail, IconSend, IconSparkles, IconTarget, IconUsers } from "../components/Icons";
 import { Avatar, Badge, CheckCell, EmptyState, KpiCard, Loading, Spinner, useToast } from "../components/ui";
 import { api } from "../lib/api";
 import { classNames, fmtDate, fmtDateTime, statusBadgeClass } from "../lib/format";
 import { useApi } from "../lib/useApi";
 import { ErrorBox } from "./Dashboard";
 
+const HERO_GRADIENT: Record<string, string> = {
+  active: "from-emerald-600 via-teal-600 to-brand-600",
+  upcoming: "from-violet-600 via-indigo-600 to-brand-600",
+  completed: "from-slate-700 via-slate-600 to-brand-700",
+};
+
 const TABS = [
   { key: "overview", label: "Overview" },
+  { key: "map", label: "Map" },
   { key: "shops", label: "Shops" },
   { key: "shoppers", label: "Shoppers" },
   { key: "recommendations", label: "AI Recommendations" },
@@ -23,7 +32,14 @@ const TABS = [
 export function CampaignDetail({ id }: { id: string }) {
   const [params, setParams] = useSearchParams();
   const activeTab = params.get("tab") || "overview";
+  const shopParam = params.get("shop") || undefined;
+  const [detailShopId, setDetailShopId] = useState<string | null>(null);
   const campaign = useApi(() => api.campaign(id), [id]);
+
+  function openRecommendationsForShop(shopId: string) {
+    setDetailShopId(null);
+    setParams({ tab: "recommendations", shop: shopId });
+  }
 
   if (campaign.loading && !campaign.data) return <Loading label="Loading campaign…" />;
   if (campaign.error) return <ErrorBox message={campaign.error} onRetry={campaign.reload} />;
@@ -36,28 +52,52 @@ export function CampaignDetail({ id }: { id: string }) {
     <div className="space-y-6">
       <div>
         <Link
-          to="/campaigns/active"
+          to="/client/campaigns/active"
           className="text-sm font-medium text-brand-600 hover:underline dark:text-brand-400"
         >
           ← Back to Campaigns
         </Link>
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white">{c.name}</h1>
-          <Badge className={statusBadgeClass(c.status === "active" ? "accepted" : "created")}>
-            {c.status}
-          </Badge>
+      </div>
+
+      <div className={classNames("card overflow-hidden bg-gradient-to-br p-6 text-white", HERO_GRADIENT[bucket] || HERO_GRADIENT.active)}>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-bold">{c.name}</h1>
+              <Badge className="bg-white/20 text-white">{c.status}</Badge>
+            </div>
+            <p className="mt-1 text-sm text-white/80">
+              {c.client_name} · Deadline {fmtDate(c.deadline)}
+            </p>
+          </div>
+          <div className="text-right">
+            <div className="text-4xl font-extrabold leading-none">{pctVal}%</div>
+            <div className="mt-1 text-xs font-medium uppercase tracking-wide text-white/70">
+              Progress
+            </div>
+          </div>
         </div>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          {c.client_name} · Deadline {fmtDate(c.deadline)}
-        </p>
+        <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-white/20">
+          <div className="h-full rounded-full bg-white transition-all" style={{ width: `${Math.min(100, pctVal)}%` }} />
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <KpiCard label="Total Shops" value={c.total_shops} accent="brand" />
-        <KpiCard label="Completed" value={c.completed_shops} accent="emerald" />
-        <KpiCard label="Remaining" value={c.remaining_shops} accent="amber" />
-        <KpiCard label="Progress" value={`${pctVal}%`} accent="indigo" />
-        <KpiCard label="Invitations" value={c.outreach?.invitations ?? 0} accent="violet" />
+        <div className="transition hover:-translate-y-0.5">
+          <KpiCard label="Total Shops" value={c.total_shops} icon={<IconUsers width={18} />} accent="brand" />
+        </div>
+        <div className="transition hover:-translate-y-0.5">
+          <KpiCard label="Completed" value={c.completed_shops} icon={<IconTarget width={18} />} accent="emerald" />
+        </div>
+        <div className="transition hover:-translate-y-0.5">
+          <KpiCard label="Remaining" value={c.remaining_shops} icon={<IconClock width={18} />} accent="amber" />
+        </div>
+        <div className="transition hover:-translate-y-0.5">
+          <KpiCard label="Progress" value={`${pctVal}%`} icon={<IconSend width={18} />} accent="indigo" />
+        </div>
+        <div className="transition hover:-translate-y-0.5">
+          <KpiCard label="Invitations" value={c.outreach?.invitations ?? 0} icon={<IconMail width={18} />} accent="violet" />
+        </div>
       </div>
 
       <div className="flex gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 dark:bg-slate-800/70">
@@ -78,25 +118,68 @@ export function CampaignDetail({ id }: { id: string }) {
       </div>
 
       {activeTab === "overview" && <OverviewTab campaign={c} />}
+      {activeTab === "map" && (
+        <CampaignMapTab campaignId={id} onOpenDetail={(shopId) => setDetailShopId(shopId)} />
+      )}
       {activeTab === "shops" && <ShopsTab campaignId={id} />}
       {activeTab === "shoppers" && <ShoppersTab campaignId={id} />}
-      {activeTab === "recommendations" && <RecommendationsTab campaignId={id} campaign={c} />}
+      {activeTab === "recommendations" && (
+        <RecommendationsTab campaignId={id} campaign={c} initialShopId={shopParam} />
+      )}
       {activeTab === "outreach" && <OutreachTab campaignId={id} bucket={bucket} />}
       {activeTab === "tracking" && <TrackingTab campaignId={id} />}
-      {activeTab === "insights" && <InsightsTab campaignId={id} />}
+      {activeTab === "insights" && <InsightsTab campaignId={id} bucket={bucket} campaignName={c.name} />}
       {activeTab === "audit-logs" && <AuditLogsTab campaignName={c.name} />}
+
+      {detailShopId && (
+        <ShopDetailDrawer
+          campaignId={id}
+          campaignName={c.name}
+          shopId={detailShopId}
+          onClose={() => setDetailShopId(null)}
+          onOpenRecommendations={openRecommendationsForShop}
+        />
+      )}
     </div>
   );
 }
 
 // ------------------------------ Overview ------------------------------ //
 function OverviewTab({ campaign: c }: { campaign: any }) {
+  const toast = useToast();
+  const [exporting, setExporting] = useState<string | null>(null);
+
+  async function doExport(format: "csv" | "xlsx" | "pdf") {
+    setExporting(format);
+    try {
+      await api.exportAdminCampaignReport(c.id, format, c.name);
+    } catch (e: any) {
+      toast(e?.message || "Export failed", "error");
+    } finally {
+      setExporting(null);
+    }
+  }
+
   return (
     <div className="grid gap-6 lg:grid-cols-3">
       <div className="card p-5 lg:col-span-2">
-        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-          Campaign overview
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+            Campaign overview
+          </h2>
+          <div className="flex gap-1">
+            {(["pdf", "xlsx", "csv"] as const).map((fmt) => (
+              <button
+                key={fmt}
+                className="btn-ghost !px-2 !py-1 text-xs uppercase"
+                disabled={exporting === fmt}
+                onClick={() => doExport(fmt)}
+              >
+                {exporting === fmt ? "…" : `Export ${fmt}`}
+              </button>
+            ))}
+          </div>
+        </div>
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
           {c.description || "No description provided."}
         </p>
@@ -108,17 +191,27 @@ function OverviewTab({ campaign: c }: { campaign: any }) {
         </dl>
       </div>
       <div className="card p-5">
-        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-          Outreach summary
+        <h2 className="mb-4 text-sm font-semibold text-slate-800 dark:text-slate-100">
+          Outreach funnel
         </h2>
-        <div className="mt-3 space-y-1.5 text-sm">
-          <Row label="Invitations" value={c.outreach?.invitations} />
-          <Row label="Sent" value={c.outreach?.sent} />
-          <Row label="Delivered" value={c.outreach?.delivered} />
-          <Row label="Opened" value={c.outreach?.opened} />
-          <Row label="Clicked" value={c.outreach?.clicked} />
-          <Row label="Accepted" value={c.outreach?.accepted} />
-          <Row label="Declined" value={c.outreach?.declined} />
+        {c.outreach?.sent ? (
+          <Funnel
+            stages={[
+              { stage: "Sent", value: c.outreach?.sent || 0 },
+              { stage: "Delivered", value: c.outreach?.delivered || 0 },
+              { stage: "Opened", value: c.outreach?.opened || 0 },
+              { stage: "Clicked", value: c.outreach?.clicked || 0 },
+              { stage: "Accepted", value: c.outreach?.accepted || 0 },
+            ]}
+          />
+        ) : (
+          <div className="flex h-40 items-center justify-center text-sm text-slate-400">
+            No outreach sent yet.
+          </div>
+        )}
+        <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-sm dark:border-slate-800">
+          <span className="text-slate-500 dark:text-slate-400">Declined</span>
+          <span className="font-semibold text-rose-500">{c.outreach?.declined ?? 0}</span>
         </div>
       </div>
     </div>
@@ -130,15 +223,6 @@ function Field({ label, value }: { label: string; value: any }) {
     <div>
       <dt className="text-xs text-slate-400">{label}</dt>
       <dd className="font-semibold text-slate-800 dark:text-slate-100">{value ?? "—"}</dd>
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: any }) {
-  return (
-    <div className="flex justify-between border-b border-slate-100 py-1.5 last:border-0 dark:border-slate-800">
-      <span className="text-slate-500 dark:text-slate-400">{label}</span>
-      <span className="font-semibold text-slate-800 dark:text-slate-100">{value ?? 0}</span>
     </div>
   );
 }
@@ -277,7 +361,16 @@ const AVAIL_META: Record<string, string> = {
   unavailable: "✕ Unavailable",
 };
 
-function RecommendationsTab({ campaignId, campaign }: { campaignId: string; campaign: any }) {
+function RecommendationsTab({
+  campaignId,
+  campaign,
+  initialShopId,
+}: {
+  campaignId: string;
+  campaign: any;
+  initialShopId?: string;
+}) {
+  const navigate = useNavigate();
   const shops = useApi(() => api.campaignShops(campaignId), [campaignId]);
   const [shopId, setShopId] = useState("");
   const [radius, setRadius] = useState(25);
@@ -285,20 +378,48 @@ function RecommendationsTab({ campaignId, campaign }: { campaignId: string; camp
   const [result, setResult] = useState<any | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [showMore, setShowMore] = useState(false);
+  const [shortlist, setShortlist] = useState<"top5" | "top10" | "all">("top10");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [breakdownFor, setBreakdownFor] = useState<any | null>(null);
+  const [profileFor, setProfileFor] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
+  const [togglingOverSelection, setTogglingOverSelection] = useState(false);
   const toast = useToast();
 
+  const shopDetail = useApi(() => (shopId ? api.shop(shopId) : Promise.resolve(null)), [shopId]);
+
+  async function toggleOverSelection(allow: boolean) {
+    if (!shopId) return;
+    setTogglingOverSelection(true);
+    try {
+      await api.setShopOverSelection(shopId, allow);
+      await shopDetail.reload();
+      toast(allow ? "Over-selection enabled for this shop." : "Over-selection disabled — selection is capped at the required count again.", "success");
+    } catch (e: any) {
+      toast(e?.message || "Failed to update over-selection setting", "error");
+    } finally {
+      setTogglingOverSelection(false);
+    }
+  }
+
   useEffect(() => {
-    if (shops.data && !shopId) setShopId(shops.data.items[0]?.id || "");
+    if (shops.data && !shopId) {
+      const preferred = initialShopId && shops.data.items.some((s: any) => s.id === initialShopId);
+      setShopId(preferred ? initialShopId! : shops.data.items[0]?.id || "");
+    }
   }, [shops.data]);
 
   useEffect(() => {
-    // Selected shop changed — clear any previous run and selection (spec §22/23).
+    // Selected shop changed — clear any previous run and selection (spec §22/23),
+    // then automatically analyze this shop's eligible shoppers so the AI
+    // recommendation list is always populated without a manual click.
     setResult(null);
     setSelected(new Set());
     setShowMore(false);
+    if (shopId) {
+      runMatching();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shopId]);
 
   const selectedShop = shops.data?.items.find((s: any) => s.id === shopId);
@@ -327,13 +448,14 @@ function RecommendationsTab({ campaignId, campaign }: { campaignId: string; camp
     });
   }
 
-  async function approve() {
+  async function approveAndGoToOutreach() {
     if (!shopId || selected.size === 0) return;
     setApproving(true);
     try {
       const res = await api.approveAiRecommendations(campaignId, shopId, Array.from(selected));
-      toast(`Approved ${res.count} shopper(s) — now available in Outreach (${res.created.map((c: any) => c.reference).join(", ")}).`, "success");
-      setSelected(new Set());
+      toast(`Approved ${res.count} shopper(s) — sending you to Outreach to email them.`, "success");
+      const type = campaign.bucket === "upcoming" ? "upcoming" : "active";
+      navigate(`/client/outreach?campaign=${campaignId}&shop=${shopId}&type=${type}`);
     } catch (e: any) {
       toast(e?.message || "Failed to approve recommendations", "error");
     } finally {
@@ -356,7 +478,9 @@ function RecommendationsTab({ campaignId, campaign }: { campaignId: string; camp
   const potentialAndLow = (result?.recommendations || []).filter(
     (r: any) => r.classification === "POTENTIAL_MATCH" || r.classification === "LOW_MATCH"
   );
-  const visible = showMore ? [...topAndStrong, ...potentialAndLow] : topAndStrong;
+  const shortlisted = showMore ? [...topAndStrong, ...potentialAndLow] : topAndStrong;
+  const visible =
+    shortlist === "all" ? shortlisted : shortlisted.slice(0, shortlist === "top5" ? 5 : 10);
   const gap = required - topAndStrong.length;
 
   return (
@@ -374,6 +498,9 @@ function RecommendationsTab({ campaignId, campaign }: { campaignId: string; camp
         <ContextField label="Required Shoppers" value={required} />
         <ContextField label="Search Radius" value={`${radius} km`} />
       </div>
+
+      <AutoAssignCard campaignId={campaignId} />
+      {shopId && <OutreachPriorityCard campaignId={campaignId} shopId={shopId} />}
 
       <div className="card flex flex-wrap items-end gap-3 p-4">
         <div>
@@ -403,18 +530,15 @@ function RecommendationsTab({ campaignId, campaign }: { campaignId: string; camp
         </div>
         <button className="btn-primary" onClick={runMatching} disabled={running || !shopId}>
           {running ? <Spinner /> : <IconSparkles width={16} height={16} />}
-          {running ? "Analyzing shopper profiles…" : "✨ Run AI Matching"}
+          {running ? "Analyzing shopper profiles…" : result ? "🔄 Re-run Analysis" : "✨ Run AI Matching"}
         </button>
       </div>
 
       {runError && <ErrorBox message={runError} onRetry={runMatching} />}
 
-      {!result && !running && (
+      {!result && running && (
         <div className="card">
-          <EmptyState
-            title="No AI matching run yet"
-            hint={'Click "Run AI Matching" to analyze the shopper database against this shop’s requirements.'}
-          />
+          <EmptyState title="Analyzing…" hint="AI matching runs automatically whenever you select a shop." />
         </div>
       )}
 
@@ -478,6 +602,28 @@ function RecommendationsTab({ campaignId, campaign }: { campaignId: string; camp
             </div>
           )}
 
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Candidate shortlist
+            </div>
+            <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-xs font-semibold dark:bg-slate-800">
+              {(["top5", "top10", "all"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  className={
+                    "rounded-md px-3 py-1 " +
+                    (shortlist === mode
+                      ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white"
+                      : "text-slate-500 dark:text-slate-400")
+                  }
+                  onClick={() => setShortlist(mode)}
+                >
+                  {mode === "top5" ? "Top 5" : mode === "top10" ? "Top 10" : "All Eligible"}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {visible.length === 0 ? (
             <div className="card">
               <EmptyState title="No candidates found" hint="Try expanding the search radius or check shopper availability." />
@@ -492,6 +638,7 @@ function RecommendationsTab({ campaignId, campaign }: { campaignId: string; camp
                   checked={selected.has(r.shopper_id)}
                   onToggle={() => toggleSelect(r.shopper_id)}
                   onBreakdown={() => setBreakdownFor(r)}
+                  onViewProfile={() => setProfileFor(r.shopper_id)}
                 />
               ))}
             </div>
@@ -505,25 +652,205 @@ function RecommendationsTab({ campaignId, campaign }: { campaignId: string; camp
             </div>
           )}
 
-          {selected.size > 0 && (
-            <div className="card sticky bottom-4 flex flex-wrap items-center justify-between gap-3 p-4">
-              <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                Selected: {selected.size} / {required} required
-                {selected.size > required && required > 0 && (
-                  <span className="ml-2 text-xs font-normal text-amber-600 dark:text-amber-400">
-                    You've selected more shoppers than required.
-                  </span>
-                )}
+          {selected.size > 0 && (() => {
+            const allowOverSelection = !!shopDetail.data?.allow_over_selection;
+            const alreadySelected = shopDetail.data?.active_selected_count ?? 0;
+            const wouldExceed =
+              !allowOverSelection && required > 0 && alreadySelected + selected.size > required;
+            const remaining = Math.max(0, required - alreadySelected);
+            return (
+              <div className="card sticky bottom-4 flex flex-wrap items-center justify-between gap-3 p-4">
+                <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                  Selected: {selected.size} / {required} required
+                  {alreadySelected > 0 && (
+                    <span className="ml-1 font-normal text-slate-400">
+                      ({alreadySelected} already selected for this shop)
+                    </span>
+                  )}
+                  {wouldExceed && (
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal text-amber-600 dark:text-amber-400">
+                      <span>
+                        Over-selection is off — only {remaining} more can be approved for this shop.
+                      </span>
+                      <button
+                        className="font-semibold underline disabled:opacity-50"
+                        onClick={() => toggleOverSelection(true)}
+                        disabled={togglingOverSelection}
+                      >
+                        Allow over-selection for this shop
+                      </button>
+                    </div>
+                  )}
+                  {allowOverSelection && (
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal text-emerald-600 dark:text-emerald-400">
+                      <span>Over-selection is allowed for this shop.</span>
+                      <button
+                        className="font-semibold underline disabled:opacity-50"
+                        onClick={() => toggleOverSelection(false)}
+                        disabled={togglingOverSelection}
+                      >
+                        Turn off
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <button className="btn-primary" onClick={approveAndGoToOutreach} disabled={approving || wouldExceed}>
+                  {approving ? <Spinner /> : null} Approve &amp; Go to Outreach
+                </button>
               </div>
-              <button className="btn-primary" onClick={approve} disabled={approving}>
-                {approving ? <Spinner /> : null} Approve Recommendations
-              </button>
-            </div>
-          )}
+            );
+          })()}
         </>
       )}
 
-      {breakdownFor && <BreakdownModal r={breakdownFor} onClose={() => setBreakdownFor(null)} />}
+      {breakdownFor && <BreakdownModal r={breakdownFor} shopId={shopId} onClose={() => setBreakdownFor(null)} />}
+      {profileFor && <ShopperDrawer shopperId={profileFor} onClose={() => setProfileFor(null)} />}
+    </div>
+  );
+}
+
+function AutoAssignCard({ campaignId }: { campaignId: string }) {
+  const toast = useToast();
+  const [optimizing, setOptimizing] = useState(false);
+  const [proposal, setProposal] = useState<any | null>(null);
+  const [approving, setApproving] = useState(false);
+
+  async function optimize() {
+    setOptimizing(true);
+    setProposal(null);
+    try {
+      const res = await api.aiOptimizeAssignments(campaignId);
+      setProposal(res);
+    } catch (e: any) {
+      toast(e?.message || "Failed to optimize assignments", "error");
+    } finally {
+      setOptimizing(false);
+    }
+  }
+
+  async function approveAll() {
+    if (!proposal) return;
+    setApproving(true);
+    try {
+      const byShop = new Map<string, string[]>();
+      for (const p of proposal.proposals) {
+        const list = byShop.get(p.shop_id) || [];
+        list.push(p.shopper_id);
+        byShop.set(p.shop_id, list);
+      }
+      let totalCreated = 0;
+      for (const [shopId, shopperIds] of byShop) {
+        const res = await api.approveAiRecommendations(campaignId, shopId, shopperIds);
+        totalCreated += res.count;
+      }
+      toast(`Approved ${totalCreated} assignment(s) — now available in Outreach.`, "success");
+      setProposal(null);
+    } catch (e: any) {
+      toast(e?.message || "Failed to approve assignments", "error");
+    } finally {
+      setApproving(false);
+    }
+  }
+
+  return (
+    <div className="card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">AI Assignment Optimization</h3>
+          <p className="text-xs text-slate-400">Finds the best shopper-to-shop assignment across this whole campaign.</p>
+        </div>
+        <button className="btn-secondary" onClick={optimize} disabled={optimizing}>
+          {optimizing ? <Spinner /> : null} Auto Assign Shoppers
+        </button>
+      </div>
+
+      {proposal && (
+        <div className="mt-4 space-y-3">
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <MiniStat label="Coverage" value={proposal.summary.coverage} accent="text-emerald-600 dark:text-emerald-400" />
+            <MiniStat label="Requirement Satisfaction" value={proposal.summary.requirement_satisfaction} accent="text-indigo-600 dark:text-indigo-400" />
+            <MiniStat label="Avg Distance (km)" value={proposal.summary.average_distance_km ?? 0} accent="text-slate-700 dark:text-slate-200" />
+          </div>
+          <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+            <table className="min-w-full text-sm">
+              <thead className="border-b border-slate-100 dark:border-slate-800">
+                <tr>
+                  <th className="th">Shop</th>
+                  <th className="th">Assigned Shopper</th>
+                  <th className="th text-right">Match Score</th>
+                  <th className="th text-right">Distance</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
+                {proposal.proposals.map((p: any, i: number) => (
+                  <tr key={i}>
+                    <td className="td">{p.shop_name}</td>
+                    <td className="td font-medium text-slate-800 dark:text-slate-100">{p.shopper_name}</td>
+                    <td className="td text-right">{p.match_score}%</td>
+                    <td className="td text-right">{p.distance_km != null ? `${p.distance_km} km` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {proposal.unfilled.length > 0 && (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+              ⚠ {proposal.unfilled.length} shop(s) could not be fully staffed:{" "}
+              {proposal.unfilled.map((u: any) => `${u.shop_name} (${u.unfilled_slots} unfilled)`).join(", ")}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <button className="btn-secondary" onClick={() => setProposal(null)}>
+              Review Assignments
+            </button>
+            <button className="btn-primary" onClick={approveAll} disabled={approving}>
+              {approving ? <Spinner /> : null} Approve All
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const PRIORITY_META: Record<string, string> = {
+  HIGH: "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
+  MEDIUM: "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300",
+  LOW: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+};
+
+function OutreachPriorityCard({ campaignId, shopId }: { campaignId: string; shopId: string }) {
+  const { data, loading, error } = useApi(() => api.aiOutreachPriority(campaignId, shopId, 10), [campaignId, shopId]);
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">AI Outreach Prioritization</h3>
+      <p className="text-xs text-slate-400">
+        Who to contact first — combining match score, acceptance probability and campaign urgency.
+      </p>
+      {loading && !data ? (
+        <div className="mt-3"><Spinner /></div>
+      ) : error ? (
+        <p className="mt-3 text-sm text-rose-500">{error}</p>
+      ) : !data.items?.length ? (
+        <p className="mt-3 text-sm text-slate-400">No eligible candidates for this shop yet.</p>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {data.items.map((p: any) => (
+            <div key={p.shopper_id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 px-3 py-2 text-sm dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <span className={"badge " + (PRIORITY_META[p.priority_tier] || PRIORITY_META.LOW)}>
+                  {p.priority_tier}
+                </span>
+                <span className="font-medium text-slate-800 dark:text-slate-100">{p.name}</span>
+              </div>
+              <div className="text-xs text-slate-400">
+                Match {p.match_score}% ·{" "}
+                {p.acceptance_probability != null ? `Accept ${p.acceptance_probability}%` : p.acceptance_label}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -552,12 +879,14 @@ function CandidateCard({
   checked,
   onToggle,
   onBreakdown,
+  onViewProfile,
 }: {
   r: any;
   rank: number;
   checked: boolean;
   onToggle: () => void;
   onBreakdown: () => void;
+  onViewProfile: () => void;
 }) {
   const meta = CLASS_META[r.classification] || CLASS_META.LOW_MATCH;
   return (
@@ -581,6 +910,9 @@ function CandidateCard({
         <div className="text-right">
           <div className="text-2xl font-extrabold text-brand-600 dark:text-brand-400">{r.match_score}%</div>
           <Badge className={meta.badge}>{meta.label}</Badge>
+          {r.confidence && (
+            <div className="mt-1 text-[10px] font-semibold text-slate-400">Confidence: {r.confidence}</div>
+          )}
         </div>
       </div>
 
@@ -594,15 +926,20 @@ function CandidateCard({
         <button className="btn-secondary" onClick={onBreakdown}>
           View Match Breakdown
         </button>
+        <button className="btn-secondary" onClick={onViewProfile}>
+          View Profile
+        </button>
       </div>
     </div>
   );
 }
 
-function BreakdownModal({ r, onClose }: { r: any; onClose: () => void }) {
+function BreakdownModal({ r, shopId, onClose }: { r: any; shopId: string; onClose: () => void }) {
   const entries = Object.values(r.breakdown) as { label: string; points: number; max: number }[];
   const total = entries.reduce((s, e) => s + e.points, 0);
   const maxTotal = entries.reduce((s, e) => s + e.max, 0);
+  const acceptance = useApi(() => api.aiAcceptanceProbability(r.shopper_id, shopId), [r.shopper_id, shopId]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
@@ -610,6 +947,9 @@ function BreakdownModal({ r, onClose }: { r: any; onClose: () => void }) {
         <h3 className="text-base font-bold text-slate-900 dark:text-white">
           {r.name} — {r.match_score}% Match
         </h3>
+        {r.confidence && (
+          <p className="mt-1 text-xs text-slate-400">Confidence: {r.confidence}</p>
+        )}
         <div className="mt-4 space-y-2">
           {entries.map((e) => (
             <div key={e.label} className="flex items-center justify-between text-sm">
@@ -629,6 +969,30 @@ function BreakdownModal({ r, onClose }: { r: any; onClose: () => void }) {
         <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
           {r.reasons.join(". ")}.
         </div>
+
+        <div className="mt-4 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">AI Acceptance Probability</div>
+          {acceptance.loading && !acceptance.data ? (
+            <div className="mt-1 text-sm text-slate-400">Computing…</div>
+          ) : acceptance.data?.probability == null ? (
+            <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">{acceptance.data?.label || "Insufficient historical data"}</div>
+          ) : (
+            <>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className="text-xl font-bold text-slate-900 dark:text-white">{acceptance.data.probability}%</span>
+                <span className="text-[10px] font-semibold text-slate-400">{acceptance.data.label}</span>
+              </div>
+              {acceptance.data.factors.length > 0 && (
+                <ul className="mt-1 space-y-0.5 text-xs text-slate-500 dark:text-slate-400">
+                  {acceptance.data.factors.map((f: string, i: number) => (
+                    <li key={i}>+ {f}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+
         <button className="btn-secondary mt-4 w-full" onClick={onClose}>
           Close
         </button>
@@ -666,9 +1030,18 @@ function OutreachTab({ campaignId, bucket }: { campaignId: string; bucket: strin
       <div className="card p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Outreach funnel</h2>
-          <button className="btn-primary" onClick={() => navigate(`/outreach?campaign=${campaignId}`)}>
-            {bucket === "upcoming" ? "Prepare Outreach" : "Create Outreach"}
-          </button>
+          {bucket === "completed" ? (
+            <span className="text-xs font-medium text-slate-400">
+              Campaign is completed — outreach is closed.
+            </span>
+          ) : (
+            <button
+              className="btn-primary"
+              onClick={() => navigate(`/client/outreach?campaign=${campaignId}&type=${bucket === "upcoming" ? "upcoming" : "active"}`)}
+            >
+              {bucket === "upcoming" ? "Prepare Outreach" : "Create Outreach"}
+            </button>
+          )}
         </div>
         <Funnel stages={funnelStages} />
       </div>
@@ -692,10 +1065,8 @@ function TrackingTab({ campaignId }: { campaignId: string }) {
               <th className="th">Shopper</th>
               <th className="th hidden md:table-cell">Email</th>
               <th className="th text-center">Sent</th>
-              <th className="th text-center">Deliv.</th>
               <th className="th text-center">Opened</th>
               <th className="th text-center">Clicked</th>
-              <th className="th">Response</th>
               <th className="th hidden lg:table-cell">Source</th>
             </tr>
           </thead>
@@ -712,14 +1083,8 @@ function TrackingTab({ campaignId }: { campaignId: string }) {
                 </td>
                 <td className="td hidden text-slate-500 md:table-cell">{r.shopper_email}</td>
                 <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.sent_at} /></div></td>
-                <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.delivered_at} /></div></td>
                 <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.opened_at} /></div></td>
                 <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.clicked_at} /></div></td>
-                <td className="td">
-                  <Badge className={statusBadgeClass(r.response || "pending")}>
-                    {r.response ? r.response : "Pending"}
-                  </Badge>
-                </td>
                 <td className="td hidden lg:table-cell">
                   <span className="badge bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300">
                     ISN Email
@@ -729,7 +1094,7 @@ function TrackingTab({ campaignId }: { campaignId: string }) {
             ))}
             {data.items.length === 0 && (
               <tr>
-                <td colSpan={8} className="td py-10 text-center text-slate-400">
+                <td colSpan={6} className="td py-10 text-center text-slate-400">
                   No tracked invitations yet.
                 </td>
               </tr>
@@ -749,37 +1114,231 @@ const SEVERITY: Record<string, { dot: string; ring: string }> = {
   info: { dot: "bg-brand-500", ring: "border-slate-200 dark:border-slate-800" },
 };
 
-function InsightsTab({ campaignId }: { campaignId: string }) {
+function InsightsTab({ campaignId, bucket, campaignName }: { campaignId: string; bucket: string; campaignName: string }) {
   const { data, loading, error, reload } = useApi(() => api.campaignInsights(campaignId), [campaignId]);
-  if (loading && !data) return <Loading label="Generating insights…" />;
-  if (error) return <ErrorBox message={error} onRetry={reload} />;
-  if (!data.insights.length)
-    return (
-      <div className="card">
-        <EmptyState
-          title="No insights yet"
-          hint="Insights appear once outreach data is available for this campaign."
-        />
-      </div>
-    );
 
   return (
-    <div className="space-y-4">
-      {data.insights.map((ins: any, i: number) => {
-        const sev = SEVERITY[ins.severity] || SEVERITY.info;
-        return (
-          <div key={i} className={"card border p-5 " + sev.ring}>
-            <div className="flex items-center gap-2">
-              <span className={"h-2.5 w-2.5 rounded-full " + sev.dot} />
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{ins.title}</h3>
-            </div>
-            <p className="mt-1.5 pl-5 text-sm text-slate-600 dark:text-slate-400">{ins.message}</p>
+    <div className="space-y-6">
+      {bucket === "completed" ? (
+        <AiPerformanceCard campaignId={campaignId} />
+      ) : (
+        <AiHealthCard campaignId={campaignId} bucket={bucket} />
+      )}
+
+      <RequirementParserCard campaignId={campaignId} />
+
+      <AiFeedbackCard campaignId={campaignId} />
+
+      <div>
+        <h3 className="mb-3 text-sm font-semibold text-slate-800 dark:text-slate-100">Rule-Based Insights</h3>
+        {loading && !data ? (
+          <Loading label="Generating insights…" />
+        ) : error ? (
+          <ErrorBox message={error} onRetry={reload} />
+        ) : !data.insights.length ? (
+          <div className="card">
+            <EmptyState title="No insights yet" hint="Insights appear once outreach data is available for this campaign." />
           </div>
-        );
-      })}
+        ) : (
+          <div className="space-y-3">
+            {data.insights.map((ins: any, i: number) => {
+              const sev = SEVERITY[ins.severity] || SEVERITY.info;
+              return (
+                <div key={i} className={"card border p-5 " + sev.ring}>
+                  <div className="flex items-center gap-2">
+                    <span className={"h-2.5 w-2.5 rounded-full " + sev.dot} />
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{ins.title}</h3>
+                  </div>
+                  <p className="mt-1.5 pl-5 text-sm text-slate-600 dark:text-slate-400">{ins.message}</p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
       <p className="text-xs text-slate-400">
-        Insights are rule/threshold based — the platform does not claim a trained predictive model.
+        Insights are rule/threshold + real-data-driven — this platform does not claim a trained predictive model.
       </p>
+    </div>
+  );
+}
+
+function AiHealthCard({ campaignId, bucket }: { campaignId: string; bucket: string }) {
+  const { data, loading, error, reload } = useApi(() => api.aiCampaignHealth(campaignId), [campaignId]);
+  if (loading && !data) return <Loading label="Computing AI campaign readiness…" />;
+  if (error) return <ErrorBox message={error} onRetry={reload} />;
+
+  const rows: [string, number][] = [
+    ["Shop Coverage", data.breakdown.shop_coverage],
+    ["Eligible Shoppers", data.breakdown.eligible_shoppers],
+    ["Candidate Quality", data.breakdown.candidate_quality],
+    ["Expected Completion", data.breakdown.expected_completion],
+  ];
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+          AI {bucket === "upcoming" ? "Campaign Readiness" : "Campaign Health"}
+        </h3>
+        <div className="text-2xl font-extrabold text-brand-600 dark:text-brand-400">{data.readiness}%</div>
+      </div>
+      <div className="mt-4 space-y-3">
+        {rows.map(([label, val]) => (
+          <div key={label}>
+            <div className="mb-1 flex justify-between text-xs">
+              <span className="text-slate-500 dark:text-slate-400">{label}</span>
+              <span className="font-semibold text-slate-700 dark:text-slate-200">{val}%</span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+              <div className="h-full rounded-full bg-brand-500" style={{ width: `${val}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+      {data.risks.length > 0 && (
+        <div className="mt-4 space-y-1.5">
+          {data.risks.map((r: string, i: number) => (
+            <p key={i} className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+              ⚠ {r}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AiPerformanceCard({ campaignId }: { campaignId: string }) {
+  const { data, loading, error, reload } = useApi(() => api.aiCampaignPerformance(campaignId), [campaignId]);
+  if (loading && !data) return <Loading label="Computing campaign performance…" />;
+  if (error) return <ErrorBox message={error} onRetry={reload} />;
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Campaign Performance</h3>
+      <div className="mt-3 grid grid-cols-3 gap-3 text-center">
+        <div className="rounded-lg bg-slate-50 py-3 dark:bg-slate-800/50">
+          <div className="text-xl font-bold text-slate-900 dark:text-white">{data.completion_rate}%</div>
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Completion Rate</div>
+        </div>
+        <div className="rounded-lg bg-slate-50 py-3 dark:bg-slate-800/50">
+          <div className="text-xl font-bold text-slate-900 dark:text-white">{data.response_rate}%</div>
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Response Rate</div>
+        </div>
+        <div className="rounded-lg bg-slate-50 py-3 dark:bg-slate-800/50">
+          <div className="text-xl font-bold text-slate-900 dark:text-white">{data.accepted}</div>
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Accepted</div>
+        </div>
+      </div>
+      <p className="mt-4 rounded-lg bg-brand-50 px-3 py-2.5 text-sm text-brand-800 dark:bg-brand-950/40 dark:text-brand-200">
+        AI Summary: {data.summary}
+      </p>
+    </div>
+  );
+}
+
+function RequirementParserCard({ campaignId }: { campaignId: string }) {
+  const toast = useToast();
+  const [text, setText] = useState("");
+  const [parsing, setParsing] = useState(false);
+  const [result, setResult] = useState<any | null>(null);
+
+  async function parse() {
+    if (!text.trim()) return;
+    setParsing(true);
+    try {
+      const res = await api.aiParseRequirements(text, campaignId);
+      setResult(res);
+      toast("Requirements parsed and saved to this campaign.", "success");
+    } catch (e: any) {
+      toast(e?.message || "Failed to parse requirements", "error");
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">AI Campaign Requirement Parser</h3>
+      <p className="mt-1 text-xs text-slate-400">
+        Describe what you need in plain language — extracted fields are saved to this campaign and used as
+        additional hard filters in AI Recommendations.
+      </p>
+      <textarea
+        className="input mt-3 h-20 resize-none text-sm"
+        placeholder="e.g. Need 5 shoppers in Mumbai for retail stores, rating above 4, within 15 km"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <button className="btn-secondary mt-2" onClick={parse} disabled={parsing || !text.trim()}>
+        {parsing ? <Spinner /> : null} Parse with AI
+      </button>
+      {result && (
+        <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-800/50">
+          <pre className="whitespace-pre-wrap text-slate-600 dark:text-slate-300">
+            {JSON.stringify(result.parsed_fields, null, 2)}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AiFeedbackCard({ campaignId }: { campaignId: string }) {
+  const { data, loading, error } = useApi(() => api.aiFeedbackAnalysis(campaignId), [campaignId]);
+  if (loading && !data) return <Loading label="Analyzing shopper feedback…" />;
+  if (error) return null;
+
+  const SENT_COLOR: Record<string, string> = {
+    positive: "text-emerald-600 dark:text-emerald-400",
+    negative: "text-rose-600 dark:text-rose-400",
+    mixed: "text-amber-600 dark:text-amber-400",
+    neutral: "text-slate-500 dark:text-slate-400",
+  };
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+        AI Feedback Analysis <span className="font-normal text-slate-400">(shopper response notes)</span>
+      </h3>
+      <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">{data.summary.executive_summary}</p>
+
+      {data.summary.key_issues.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {data.summary.key_issues.map((k: any, i: number) => (
+            <span key={i} className="badge bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              {k.severity === "red" ? "🔴" : k.severity === "yellow" ? "🟡" : "🟢"} {k.issue} ({k.mentions})
+            </span>
+          ))}
+        </div>
+      )}
+
+      {data.notes.length > 0 && (
+        <ul className="mt-4 space-y-2 divide-y divide-slate-100 dark:divide-slate-800">
+          {data.notes.map((n: any, i: number) => (
+            <li key={i} className="pt-2 first:pt-0">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{n.shopper_name}</span>
+                <span className={classNames("text-[11px] font-semibold capitalize", SENT_COLOR[n.sentiment.sentiment])}>
+                  {n.sentiment.sentiment}
+                </span>
+              </div>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">"{n.note}"</p>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {data.qa_flags.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          {data.qa_flags.map((f: any, i: number) => (
+            <p key={i} className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+              ⚠ {f.shopper_name}: {f.reason}
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_session
-from ..deps import get_current_user
+from ..deps import require_admin
 from ..models import Campaign, Shop, Shopper, User
 from ..services.analytics import compute_summary, recent_activity
 
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 @router.get("/metrics")
 async def dashboard_metrics(
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ):
     summary = await compute_summary(session)
 

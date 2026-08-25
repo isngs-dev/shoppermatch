@@ -68,8 +68,8 @@ export function Home() {
             with end-to-end attribution from the ISN invitation to the shopper's response.
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <button className="btn-primary px-6 py-3 text-base" onClick={() => navigate("/dashboard")}>
-              Open ISN Dashboard
+            <button className="btn-primary px-6 py-3 text-base" onClick={() => navigate("/login")}>
+              Sign in
               <IconArrowRight width={18} height={18} />
             </button>
             <button

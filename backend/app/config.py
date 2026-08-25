@@ -80,6 +80,24 @@ class Settings(BaseSettings):
     email_worker_poll_seconds: float = 3.0
     email_max_attempts: int = 3
 
+    # ----- Bulk email throttling -----
+    # Global governor applied to every send that flows through the outbox
+    # (manual sends, automation sequences, everything) — not a per-source
+    # limit. Once `bulk_email_batch_size` sends land in a row, the worker
+    # pauses for `bulk_email_batch_delay_seconds` before continuing; once
+    # `bulk_email_daily_limit` sends have completed in a rolling 24h window,
+    # the worker stops claiming new jobs until the window rolls forward.
+    bulk_email_batch_size: int = 1000
+    bulk_email_daily_limit: int = 5000
+    bulk_email_batch_delay_seconds: float = 300.0
+
+    # ----- Email automation engine -----
+    # How often the background scheduler checks for due automation steps.
+    # Independent of email_worker_poll_seconds — the outbox still delivers
+    # each individual message quickly; this only controls how often the
+    # sequencing engine looks for shoppers whose wait period has elapsed.
+    automation_poll_seconds: float = 30.0
+
     # ----- Auth -----
     demo_admin_name: str = "ISN Admin"
     demo_admin_email: str = "admin@isn.com"
@@ -97,6 +115,35 @@ class Settings(BaseSettings):
 
     # ----- Rate limiting (tracking endpoints) -----
     tracking_rate_limit_per_minute: int = 240
+
+    # ----- Demo mode -----
+    # When true (default for this project), integrations without real
+    # credentials configured run on their demo/mock adapter instead of
+    # reporting DISCONNECTED — the app stays demonstrable end-to-end. The UI
+    # always labels this DEMO, never CONNECTED, so it's never confused with
+    # a real external connection.
+    demo_mode: bool = True
+
+    # ----- Integrations: SASSIE -----
+    sassie_api_base_url: str | None = None
+    sassie_api_key: str | None = None
+    sassie_client_id: str | None = None
+
+    # ----- Integrations: Google Maps -----
+    google_maps_api_key: str | None = None
+
+    # ----- Integrations: AI -----
+    # This project's recommendation engine (services/semantic_matching.py) is
+    # a local rule-based + TF-cosine engine — it does not call any of these.
+    # They exist so a future external provider swap is just a config change.
+    ai_provider: str | None = None
+    ai_model: str | None = None
+    ai_api_key: str | None = None
+
+    # ----- Integrations: SMS -----
+    sms_provider: str | None = None
+    sms_api_key: str | None = None
+    sms_sender: str | None = None
 
     @property
     def is_sqlite(self) -> bool:

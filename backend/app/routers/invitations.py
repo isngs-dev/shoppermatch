@@ -17,13 +17,15 @@ from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..database import get_session
-from ..deps import get_current_user
+from ..deps import require_operator
 from ..models import Campaign, EmailComposition, EventType, Invitation, Shop, Shopper, User
-from ..schemas import InvitationCreateRequest, SendTestRequest, SimulateRequest
+from ..schemas import BulkInvitationCreateRequest, InvitationCreateRequest, SendTestRequest, SimulateRequest
 from ..serializers import invitation_detail, invitation_row
 from ..services.audit import record_audit
 from ..services.email import render_invitation_email, send_email
 from ..services.outbox import enqueue_email
+from ..services.selection import enforce_over_selection
+from ..services.tenancy import enforce_campaign_access
 from ..services.tracking import (
     add_event,
     mark_clicked,
@@ -65,7 +67,7 @@ async def load_full(session: AsyncSession, invitation_id: uuid.UUID) -> Invitati
             selectinload(Invitation.shopper),
             selectinload(Invitation.email_job),
             selectinload(Invitation.events),
-            selectinload(Invitation.email_job),
+            selectinload(Invitation.automation),
         )
     )
     return (await session.execute(stmt)).scalar_one_or_none()
@@ -81,20 +83,20 @@ async def next_reference(session: AsyncSession) -> str:
 async def create_invitation(
     body: InvitationCreateRequest,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     campaign = await session.get(Campaign, _parse_uuid(body.campaign_id, "campaign"))
     shop = await session.get(Shop, _parse_uuid(body.shop_id, "shop"))
     shopper = await session.get(Shopper, _parse_uuid(body.shopper_id, "shopper"))
 
-    if campaign is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+    campaign = enforce_campaign_access(campaign, user)
     if shop is None:
         raise HTTPException(status_code=404, detail="Shop not found")
     if shopper is None:
         raise HTTPException(status_code=404, detail="Shopper not found")
     if shop.campaign_id != campaign.id:
         raise HTTPException(status_code=400, detail="Shop does not belong to campaign")
+    await enforce_over_selection(session, shop, 1)
 
     reference = await next_reference(session)
     subject = body.subject or _subject_for(body.template, campaign)
@@ -166,14 +168,107 @@ async def create_invitation(
     return detail
 
 
+# --------------------------------------------------------------------------- #
+@router.post("/bulk")
+async def create_bulk_invitations(
+    body: BulkInvitationCreateRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    """One batch of a bulk send (spec: batch size / iterations). Reuses the
+    exact same per-invitation creation path as `POST /api/invitations` in a
+    loop — same reference numbering, same event/audit logging, same outbox
+    enqueue — so a bulk send is never a second code path, just this one
+    called N times. Actual send pacing (batch delay / daily cap) is enforced
+    once, globally, by the outbox worker (services/outbox.py), not here."""
+    campaign = await session.get(Campaign, _parse_uuid(body.campaign_id, "campaign"))
+    shop = await session.get(Shop, _parse_uuid(body.shop_id, "shop"))
+    campaign = enforce_campaign_access(campaign, user)
+    if shop is None:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    if shop.campaign_id != campaign.id:
+        raise HTTPException(status_code=400, detail="Shop does not belong to campaign")
+    await enforce_over_selection(session, shop, len(body.shopper_ids))
+
+    created: list[dict] = []
+    failed: list[dict] = []
+
+    for raw_id in body.shopper_ids:
+        try:
+            shopper = await session.get(Shopper, _parse_uuid(raw_id, "shopper"))
+        except HTTPException:
+            failed.append({"shopper_id": raw_id, "error": "Invalid shopper id"})
+            continue
+        if shopper is None:
+            failed.append({"shopper_id": raw_id, "error": "Shopper not found"})
+            continue
+
+        reference = await next_reference(session)
+        inv = Invitation(
+            tracking_token=uuid.uuid4(),
+            reference=reference,
+            campaign_id=campaign.id,
+            shop_id=shop.id,
+            shopper_id=shopper.id,
+            email=shopper.email,
+            subject=body.custom_subject or _subject_for("standard", campaign),
+            status="created",
+            source="ISN Outreach",
+            utm_source="isn",
+            utm_medium="email",
+            utm_campaign=_slug(campaign.name),
+            utm_content="bulk_invitation",
+        )
+        inv.campaign = campaign
+        inv.shop = shop
+        inv.shopper = shopper
+        session.add(inv)
+        await session.flush()
+
+        await add_event(
+            session,
+            inv,
+            EventType.INVITATION_CREATED,
+            {"source": "ISN", "campaign": campaign.name, "bulk": True},
+        )
+
+        if body.custom_subject and body.custom_html:
+            session.add(
+                EmailComposition(
+                    invitation_id=inv.id,
+                    subject_template=body.custom_subject,
+                    html_template=body.custom_html,
+                )
+            )
+
+        if body.auto_send:
+            await enqueue_email(session, inv)
+
+        created.append({"shopper_id": str(shopper.id), "shopper_name": shopper.name, "reference": reference, "invitation_id": str(inv.id)})
+
+    await record_audit(
+        session,
+        action="invitation.bulk_created",
+        actor=user.email,
+        entity_type="campaign",
+        entity_id=str(campaign.id),
+        summary=f"Bulk-created {len(created)} invitation(s) for {shop.shop_name} ({len(failed)} failed)",
+        meta={"shop_id": str(shop.id), "created": len(created), "failed": len(failed)},
+    )
+    await session.commit()
+
+    return {"created": created, "failed": failed, "total_created": len(created), "total_failed": len(failed)}
+
+
 @router.get("")
 async def list_invitations(
     campaign_id: uuid.UUID | None = Query(default=None),
+    shop_id: uuid.UUID | None = Query(default=None),
     status: str | None = Query(default=None),
     q: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     stmt = (
         select(Invitation)
@@ -184,10 +279,17 @@ async def list_invitations(
             selectinload(Invitation.shop),
             selectinload(Invitation.shopper),
             selectinload(Invitation.email_job),
+            selectinload(Invitation.automation),
         )
     )
     if campaign_id is not None:
+        campaign = await session.get(Campaign, campaign_id)
+        enforce_campaign_access(campaign, user)
         stmt = stmt.where(Invitation.campaign_id == campaign_id)
+    elif user.role == "client":
+        stmt = stmt.join(Campaign, Invitation.campaign_id == Campaign.id).where(Campaign.client_id == user.client_id)
+    if shop_id is not None:
+        stmt = stmt.where(Invitation.shop_id == shop_id)
     if status:
         stmt = stmt.where(Invitation.status == status)
     if q:
@@ -203,11 +305,12 @@ async def list_invitations(
 async def get_invitation(
     invitation_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     inv = await load_full(session, invitation_id)
     if inv is None:
         raise HTTPException(status_code=404, detail="Invitation not found")
+    enforce_campaign_access(inv.campaign, user)
     return invitation_detail(inv)
 
 
@@ -216,11 +319,12 @@ async def preview_email(
     invitation_id: uuid.UUID,
     preview: bool = Query(default=True),
     session: AsyncSession = Depends(get_session),
-    _: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     inv = await load_full(session, invitation_id)
     if inv is None:
         raise HTTPException(status_code=404, detail="Invitation not found")
+    enforce_campaign_access(inv.campaign, user)
     return await render_invitation_email(session, inv, preview=preview)
 
 
@@ -229,13 +333,14 @@ async def simulate(
     invitation_id: uuid.UUID,
     body: SimulateRequest,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     """Demo helper. Writes REAL events/timestamps via the same tracking service
     that the public endpoints use — nothing is faked in the frontend."""
-    inv = await session.get(Invitation, invitation_id)
+    inv = await load_full(session, invitation_id)
     if inv is None:
         raise HTTPException(status_code=404, detail="Invitation not found")
+    enforce_campaign_access(inv.campaign, user)
 
     meta = {"source": "simulation", "actor": user.email}
     recorded = True
@@ -267,11 +372,12 @@ async def simulate(
 async def send_invitation(
     invitation_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     inv = await load_full(session, invitation_id)
     if inv is None:
         raise HTTPException(status_code=404, detail="Invitation not found")
+    enforce_campaign_access(inv.campaign, user)
 
     # Idempotency: never silently double-send on a double-click, browser
     # retry, or re-render. sent_at is the durable guard — it's only ever set
@@ -317,11 +423,12 @@ async def send_test_invitation(
     invitation_id: uuid.UUID,
     body: SendTestRequest,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     inv = await load_full(session, invitation_id)
     if inv is None:
         raise HTTPException(status_code=404, detail="Invitation not found")
+    enforce_campaign_access(inv.campaign, user)
 
     message = await render_invitation_email(session, inv, preview=True)
     message = {**message, "to": str(body.test_email), "subject": f"[TEST] {message['subject']}"}
@@ -349,11 +456,12 @@ async def send_test_invitation(
 async def create_follow_up(
     invitation_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_operator),
 ):
     original = await load_full(session, invitation_id)
     if original is None:
         raise HTTPException(status_code=404, detail="Invitation not found")
+    enforce_campaign_access(original.campaign, user)
     if original.sent_at is None:
         raise HTTPException(status_code=400, detail="Original invitation has not been sent yet.")
 

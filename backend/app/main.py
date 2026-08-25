@@ -19,21 +19,31 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from . import __version__
 from .config import settings
-from .database import init_models
+from .database import AsyncSessionLocal, init_models
 from .routers import (
+    ai,
+    admin_users,
     auth,
+    automations,
+    batch_automations,
     campaigns,
+    client_portal,
     dashboard,
     email_templates,
+    integrations,
     invitations,
     misc,
+    notifications,
     recommendations,
+    reports,
     shoppers,
     shops,
     tracking,
     webhooks,
 )
 from .seed import maybe_seed
+from .services.automation import ensure_default_templates, run_automation_scheduler
+from .services.batch_automation import run_batch_automation_scheduler
 from .services.outbox import reset_stuck_jobs, run_outbox_worker
 
 
@@ -49,15 +59,23 @@ async def lifespan(app: FastAPI):
     requeued = await reset_stuck_jobs()
     if requeued:
         print(f"Requeued {requeued} email job(s) stuck in 'sending' from a previous run.")
+    async with AsyncSessionLocal() as session:
+        await ensure_default_templates(session)
+        await session.commit()
     worker = asyncio.create_task(run_outbox_worker(), name="shoppermatch-email-outbox")
+    automation_worker = asyncio.create_task(run_automation_scheduler(), name="shoppermatch-automation-scheduler")
+    batch_automation_worker = asyncio.create_task(run_batch_automation_scheduler(), name="shoppermatch-batch-automation-scheduler")
     try:
         yield
     finally:
         worker.cancel()
-        try:
-            await worker
-        except asyncio.CancelledError:
-            pass
+        automation_worker.cancel()
+        batch_automation_worker.cancel()
+        for task in (worker, automation_worker, batch_automation_worker):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(
@@ -93,6 +111,14 @@ app.include_router(invitations.router)
 app.include_router(tracking.router)  # public /r, /track + /api/tracking/*
 app.include_router(email_templates.router)
 app.include_router(webhooks.router)  # public /api/webhooks/sendgrid
+app.include_router(notifications.router)
+app.include_router(integrations.router)
+app.include_router(ai.router)
+app.include_router(client_portal.router)
+app.include_router(automations.router)
+app.include_router(batch_automations.router)
+app.include_router(reports.router)
+app.include_router(admin_users.router)
 app.include_router(misc.router)
 
 

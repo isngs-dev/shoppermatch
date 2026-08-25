@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { ToastProvider } from "./components/ui";
 import "./index.css";
+import "leaflet/dist/leaflet.css";
 import { AuthProvider } from "./lib/auth";
 import { initTheme } from "./lib/theme";
 

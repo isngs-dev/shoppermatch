@@ -85,6 +85,19 @@ async def mark_clicked(session: AsyncSession, inv: Invitation, metadata: dict | 
     return True
 
 
+async def mark_visited(session: AsyncSession, inv: Invitation, metadata: dict | None = None) -> bool:
+    """Record that the assignment landing page itself actually loaded — a
+    stronger, separate signal from the CLICKED redirect. Deduplicated to the
+    first visit for a clean timeline. Returns True if this call recorded a
+    *new* visit, False if already visited."""
+    if inv.visited_at is not None:
+        return False
+    inv.visited_at = now()
+    advance_status(inv, InvitationStatus.VISITED)
+    await add_event(session, inv, EventType.ASSIGNMENT_VISITED, metadata)
+    return True
+
+
 async def mark_response(
     session: AsyncSession, inv: Invitation, response: str, metadata: dict | None = None
 ) -> bool:

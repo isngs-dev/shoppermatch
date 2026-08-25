@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Funnel } from "../components/Funnel";
 import { InvitationDrawer } from "../components/InvitationDrawer";
 import {
@@ -18,6 +18,9 @@ export function Tracking() {
   const list = useApi(() => api.invitations({ limit: 500 }));
   const [selected, setSelected] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [clientFilter, setClientFilter] = useState("");
+  const [campaignFilter, setCampaignFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
 
   function refresh() {
     summary.reload();
@@ -29,18 +32,32 @@ export function Tracking() {
     return () => window.clearInterval(interval);
   }, [summary.reload, list.reload]);
 
+  const allRows = list.data?.items || [];
+  const clients = useMemo(
+    () => Array.from(new Set(allRows.map((r: any) => r.client_name).filter(Boolean))).sort(),
+    [allRows]
+  );
+  const campaigns = useMemo(
+    () => Array.from(new Set(allRows.map((r: any) => r.campaign_name).filter(Boolean))).sort(),
+    [allRows]
+  );
+
   if ((summary.loading && !summary.data) || (list.loading && !list.data))
     return <Loading label="Loading tracking data…" />;
   if (summary.error) return <ErrorBox message={summary.error} onRetry={refresh} />;
 
   const s = summary.data;
-  const rows = (list.data?.items || []).filter((r: any) => {
+  const rows = allRows.filter((r: any) => {
+    if (clientFilter && r.client_name !== clientFilter) return false;
+    if (campaignFilter && r.campaign_name !== campaignFilter) return false;
+    if (statusFilter && r.status !== statusFilter) return false;
     if (!query) return true;
     const q = query.toLowerCase();
     return (
       (r.shopper_name || "").toLowerCase().includes(q) ||
       (r.shopper_email || "").toLowerCase().includes(q) ||
-      (r.campaign_name || "").toLowerCase().includes(q)
+      (r.campaign_name || "").toLowerCase().includes(q) ||
+      (r.reference || "").toLowerCase().includes(q)
     );
   });
 
@@ -83,10 +100,28 @@ export function Tracking() {
             <span className="ml-2 text-xs font-normal text-slate-400">{rows.length}</span>
             <span className="ml-2 text-[11px] font-normal text-emerald-600 dark:text-emerald-400">Live: refreshes every 4s</span>
           </h2>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select className="input h-9 w-36" value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
+              <option value="">All clients</option>
+              {clients.map((c: any) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <select className="input h-9 w-44" value={campaignFilter} onChange={(e) => setCampaignFilter(e.target.value)}>
+              <option value="">All campaigns</option>
+              {campaigns.map((c: any) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <select className="input h-9 w-32" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">All statuses</option>
+              {["created", "sent", "delivered", "opened", "clicked", "visited", "accepted", "declined"].map((st) => (
+                <option key={st} value={st}>{cap(st)}</option>
+              ))}
+            </select>
             <input
               className="input h-9 w-52"
-              placeholder="Search shopper / campaign…"
+              placeholder="Search shopper / campaign / INV-…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -100,14 +135,18 @@ export function Tracking() {
             <thead className="border-b border-slate-100 dark:border-slate-800">
               <tr>
                 <th className="th">Shopper</th>
+                <th className="th">Invitation ID</th>
                 <th className="th">Campaign</th>
+                <th className="th hidden lg:table-cell">Shop</th>
+                <th className="th hidden xl:table-cell">Client</th>
                 <th className="th hidden md:table-cell">Email</th>
                 <th className="th text-center">Sent</th>
-                <th className="th text-center">Deliv.</th>
                 <th className="th text-center">Opened</th>
                 <th className="th text-center">Clicked</th>
-                <th className="th">Response</th>
+                <th className="th text-center">Visited</th>
                 <th className="th hidden lg:table-cell">Source</th>
+                <th className="th hidden xl:table-cell">Automation</th>
+                <th className="th hidden xl:table-cell">Last Event</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
@@ -119,29 +158,38 @@ export function Tracking() {
                 >
                   <td className="td font-medium text-slate-800 dark:text-slate-100">
                     {r.shopper_name}
-                    <div className="text-[11px] font-normal text-slate-400">{r.reference}</div>
                   </td>
+                  <td className="td font-mono text-xs text-slate-500">{r.reference}</td>
                   <td className="td">{r.campaign_name}</td>
+                  <td className="td hidden text-slate-500 lg:table-cell">{r.shop_name}</td>
+                  <td className="td hidden text-slate-500 xl:table-cell">{r.client_name}</td>
                   <td className="td hidden text-slate-500 md:table-cell">{r.shopper_email}</td>
                   <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.sent_at} /></div></td>
-                  <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.delivered_at} /></div></td>
                   <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.opened_at} /></div></td>
                   <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.clicked_at} /></div></td>
-                  <td className="td">
-                    <Badge className={statusBadgeClass(r.response || "pending")}>
-                      {r.response ? cap(r.response) : "Pending"}
-                    </Badge>
-                  </td>
+                  <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.visited_at} /></div></td>
                   <td className="td hidden lg:table-cell">
                     <span className="badge bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300">
                       ISN Email
                     </span>
                   </td>
+                  <td className="td hidden xl:table-cell">
+                    {r.automation_id ? (
+                      <span className="badge bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                        {r.automation_name} · Step {r.automation_step}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 dark:text-slate-600">Manual</span>
+                    )}
+                  </td>
+                  <td className="td hidden xl:table-cell">
+                    <Badge className={statusBadgeClass(r.status)}>{cap(r.status)}</Badge>
+                  </td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="td py-10 text-center text-slate-400">
+                  <td colSpan={13} className="td py-10 text-center text-slate-400">
                     No invitations match your search.
                   </td>
                 </tr>

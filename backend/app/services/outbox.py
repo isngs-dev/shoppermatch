@@ -10,7 +10,7 @@ import asyncio
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from ..config import settings
@@ -125,6 +125,18 @@ async def _complete_job(job_id: uuid.UUID) -> None:
         await session.commit()
 
 
+async def sent_count_last_24h() -> int:
+    """Rolling 24h SENT count — the same number both the daily-limit gate
+    below and any future "sends today" status UI should read, so there's
+    exactly one definition of "how many have gone out today"."""
+    async with AsyncSessionLocal() as session:
+        cutoff = now() - timedelta(hours=24)
+        stmt = select(func.count(EmailJob.id)).where(
+            EmailJob.status == EmailJobStatus.SENT, EmailJob.completed_at >= cutoff
+        )
+        return int((await session.execute(stmt)).scalar() or 0)
+
+
 async def process_one_email_job() -> bool:
     """Process one due job; useful for the worker and in-process verification."""
     job_id = await _claim_next_job()
@@ -136,12 +148,30 @@ async def process_one_email_job() -> bool:
 
 async def run_outbox_worker() -> None:
     """Run for the FastAPI process lifetime. One job at a time keeps this demo
-    predictable; production can run a separate worker fleet with DB locking."""
+    predictable; production can run a separate worker fleet with DB locking.
+
+    Bulk-send throttling (spec section 16): pause `bulk_email_batch_delay_seconds`
+    after every `bulk_email_batch_size` consecutive sends, and stop claiming
+    new jobs entirely once `bulk_email_daily_limit` sends have completed in
+    the trailing 24h — queued/retrying jobs just wait for the next window
+    instead of being dropped."""
+    batch_sent = 0
     while True:
         try:
+            if await sent_count_last_24h() >= settings.bulk_email_daily_limit:
+                await asyncio.sleep(max(settings.email_worker_poll_seconds, 60.0))
+                continue
+
             processed = await process_one_email_job()
             if not processed:
+                batch_sent = 0
                 await asyncio.sleep(settings.email_worker_poll_seconds)
+                continue
+
+            batch_sent += 1
+            if batch_sent >= settings.bulk_email_batch_size:
+                batch_sent = 0
+                await asyncio.sleep(settings.bulk_email_batch_delay_seconds)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - keep the operator app alive
