@@ -1,0 +1,13 @@
+# Railway deploy config — one service, built from the root Dockerfile
+# (frontend build + backend runtime in a single image, see Dockerfile).
+# Add a Railway Postgres plugin to the project and it auto-injects
+# DATABASE_URL; config.py normalizes that to the asyncpg driver scheme.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/api/health"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

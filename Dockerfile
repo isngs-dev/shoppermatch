@@ -29,4 +29,7 @@ COPY --from=frontend /frontend/dist ./static
 
 EXPOSE 8000
 # Schema creation + demo seeding happen automatically on startup (lifespan).
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form (not exec-array) so $PORT expands — Railway (and similar PaaS
+# hosts) inject their own port and expect the process to bind to it; 8000
+# remains the default for `docker run`/compose where nothing sets $PORT.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}

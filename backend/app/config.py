@@ -146,6 +146,20 @@ class Settings(BaseSettings):
     sms_sender: str | None = None
 
     @property
+    def resolved_database_url(self) -> str:
+        # Managed Postgres add-ons (Railway, Render, Heroku, ...) inject a
+        # plain `postgresql://` or `postgres://` DATABASE_URL — SQLAlchemy's
+        # async engine needs the asyncpg driver named explicitly in the
+        # scheme. Local dev/sqlite and an already-qualified URL pass through
+        # unchanged.
+        url = self.database_url
+        if url.startswith("postgres://"):
+            return "postgresql+asyncpg://" + url[len("postgres://") :]
+        if url.startswith("postgresql://"):
+            return "postgresql+asyncpg://" + url[len("postgresql://") :]
+        return url
+
+    @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
 

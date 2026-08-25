@@ -27,7 +27,7 @@ def _build_engine():
         kwargs["pool_pre_ping"] = True
         kwargs["pool_size"] = 10
         kwargs["max_overflow"] = 20
-    return create_async_engine(settings.database_url, **kwargs)
+    return create_async_engine(settings.resolved_database_url, **kwargs)
 
 
 engine = _build_engine()
