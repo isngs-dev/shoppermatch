@@ -1,6 +1,13 @@
-// Thin typed fetch client. All requests are same-origin relative URLs so this
-// works identically in dev (via Vite proxy) and in production (FastAPI serves
-// the built SPA). Auth uses a bearer token kept in localStorage.
+// Thin typed fetch client. Requests default to same-origin relative URLs —
+// works identically in dev (via Vite proxy) and when FastAPI serves the
+// built SPA itself. Set VITE_API_BASE_URL (build-time env var) when the
+// frontend is deployed separately from the backend (e.g. frontend on
+// Vercel, backend on Railway/Render) so requests reach the right origin.
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+
+function apiUrl(path: string): string {
+  return path.startsWith("/") ? API_BASE + path : path;
+}
 
 const TOKEN_KEY = "sm_token";
 
@@ -34,7 +41,7 @@ async function request<T = any>(path: string, options: Options = {}): Promise<T>
   const token = getToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     method: options.method || "GET",
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
@@ -59,7 +66,7 @@ export async function downloadFile(path: string, filename: string): Promise<void
   const token = getToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(path, { headers });
+  const res = await fetch(apiUrl(path), { headers });
   if (!res.ok) {
     if (res.status === 401) clearToken();
     let detail = res.statusText || "Export failed";
