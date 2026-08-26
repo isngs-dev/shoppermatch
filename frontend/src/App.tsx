@@ -9,6 +9,7 @@ import { AuditLogs } from "./pages/AuditLogs";
 import { Campaigns } from "./pages/Campaigns";
 import { ClientActivity } from "./pages/ClientActivity";
 import { Dashboard } from "./pages/Dashboard";
+import { AutomationDetailPage } from "./pages/EmailAutomation";
 import { ForgotPassword } from "./pages/ForgotPassword";
 import { Home } from "./pages/Home";
 import { Insights } from "./pages/Insights";
@@ -97,6 +98,7 @@ export default function App() {
         <Route path="/client/shoppers" element={<Shoppers />} />
         <Route path="/client/recommendations" element={<Recommendations />} />
         <Route path="/client/outreach" element={<Outreach />} />
+        <Route path="/client/outreach/automations/:automationId" element={<AutomationDetailPage />} />
         {/* Templates and Automation now live inside Outreach's tabs — these
             redirects keep old bookmarks/links working. */}
         <Route path="/client/email-templates" element={<Navigate to="/client/outreach?tab=templates" replace />} />

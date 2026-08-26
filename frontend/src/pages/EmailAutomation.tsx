@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { Avatar, Badge, EmptyState, KpiCard, Loading, Spinner, useToast } from "../components/ui";
 import { api } from "../lib/api";
 import { classNames, fmtDateTime } from "../lib/format";
@@ -31,10 +32,10 @@ function cap(s: string) {
 
 export function EmailAutomationPanel({ compact }: { compact?: boolean }) {
   const toast = useToast();
+  const navigate = useNavigate();
   const [campaignType, setCampaignType] = useState<"active" | "upcoming">("active");
   const campaigns = useApi(() => api.campaigns({ status: campaignType }), [campaignType]);
   const [campaignId, setCampaignId] = useState("");
-  const [selectedAutomationId, setSelectedAutomationId] = useState<string | null>(null);
   const [showBuilder, setShowBuilder] = useState(false);
 
   useEffect(() => {
@@ -51,7 +52,6 @@ export function EmailAutomationPanel({ compact }: { compact?: boolean }) {
   const automations = useApi(() => (campaignId ? api.automations(campaignId) : Promise.resolve({ items: [] })), [campaignId]);
 
   useEffect(() => {
-    setSelectedAutomationId(null);
     setShowBuilder(false);
   }, [campaignId]);
 
@@ -122,7 +122,7 @@ export function EmailAutomationPanel({ compact }: { compact?: boolean }) {
           {automations.data.items.map((a: any) => (
             <button
               key={a.id}
-              onClick={() => setSelectedAutomationId(a.id)}
+              onClick={() => navigate(`/client/outreach/automations/${a.id}`)}
               className="card p-4 text-left transition hover:border-brand-300 dark:hover:border-brand-700"
             >
               <div className="flex items-start justify-between gap-2">
@@ -149,14 +149,9 @@ export function EmailAutomationPanel({ compact }: { compact?: boolean }) {
           onClose={() => setShowBuilder(false)}
           onCreated={(id) => {
             setShowBuilder(false);
-            automations.reload();
-            setSelectedAutomationId(id);
+            navigate(`/client/outreach/automations/${id}`);
           }}
         />
-      )}
-
-      {selectedAutomationId && (
-        <AutomationDetail automationId={selectedAutomationId} onClose={() => setSelectedAutomationId(null)} onChanged={automations.reload} />
       )}
     </div>
   );
@@ -409,9 +404,14 @@ function AutomationBuilder({
 }
 
 // ------------------------------ Detail / Dashboard ------------------------------ //
-function AutomationDetail({ automationId, onClose, onChanged }: { automationId: string; onClose: () => void; onChanged: () => void }) {
+// Its own routed page (/client/outreach/automations/:id) rather than a modal
+// over the Email Automation list — each automation gets a real URL you can
+// bookmark/share/refresh, and Back is genuine browser back navigation.
+export function AutomationDetailPage() {
+  const { automationId } = useParams<{ automationId: string }>();
+  const navigate = useNavigate();
   const toast = useToast();
-  const { data, loading, error, reload } = useApi(() => api.automation(automationId), [automationId]);
+  const { data, loading, error, reload } = useApi(() => api.automation(automationId!), [automationId]);
   const [busy, setBusy] = useState<string | null>(null);
   const [previewFor, setPreviewFor] = useState<{ shopperId: string; step: number } | null>(null);
 
@@ -424,10 +424,9 @@ function AutomationDetail({ automationId, onClose, onChanged }: { automationId: 
     setBusy(action);
     try {
       const fn = { start: api.startAutomation, pause: api.pauseAutomation, resume: api.resumeAutomation, stop: api.stopAutomation }[action];
-      await fn(automationId);
+      await fn(automationId!);
       toast(`Automation ${action === "start" ? "started" : action + "d"}.`, "success");
       reload();
-      onChanged();
     } catch (e: any) {
       toast(e?.message || `Failed to ${action} automation`, "error");
     } finally {
@@ -435,127 +434,141 @@ function AutomationDetail({ automationId, onClose, onChanged }: { automationId: 
     }
   }
 
+  const backLink = (
+    <button
+      className="text-sm font-semibold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100"
+      onClick={() => navigate("/client/outreach?tab=batch")}
+    >
+      ← Back to Email Automation
+    </button>
+  );
+
   if (loading && !data) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-        <div className="relative rounded-xl bg-white p-8 dark:bg-slate-900"><Spinner /></div>
+      <div className="space-y-4">
+        {backLink}
+        <Loading label="Loading automation…" />
       </div>
     );
   }
-  if (error || !data) return null;
+  if (error || !data) {
+    return (
+      <div className="space-y-4">
+        {backLink}
+        <ErrorBox message={error || "Automation not found"} onRetry={reload} />
+      </div>
+    );
+  }
 
   const d = data.dashboard;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">{data.name}</h3>
-              <Badge className={STATUS_BADGE[data.status] || STATUS_BADGE.draft}>{cap(data.status)}</Badge>
-            </div>
-            <p className="text-xs text-slate-400">
-              {data.campaign_name} · {data.shop_name} · every {data.wait_days} day(s) · up to {data.max_steps} emails/shopper
-              {data.batch_size ? ` · batch of ${data.batch_size}, ${data.total_iterations} iteration(s)` : ""}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {(data.status === "draft" || data.status === "paused" || data.status === "stopped") && (
-              <button className="btn-primary h-9" onClick={() => act("start")} disabled={!!busy}>
-                {busy === "start" ? <Spinner /> : null} {data.status === "paused" ? "Resume via Start" : "Start"}
-              </button>
-            )}
-            {(data.status === "active" || data.status === "scheduled") && (
-              <button className="btn-secondary h-9" onClick={() => act("pause")} disabled={!!busy}>
-                {busy === "pause" ? <Spinner /> : null} Pause
-              </button>
-            )}
-            {data.status === "paused" && (
-              <button className="btn-primary h-9" onClick={() => act("resume")} disabled={!!busy}>
-                {busy === "resume" ? <Spinner /> : null} Resume
-              </button>
-            )}
-            {["active", "scheduled", "paused"].includes(data.status) && (
-              <button className="btn-secondary h-9 text-rose-600" onClick={() => act("stop")} disabled={!!busy}>
-                {busy === "stop" ? <Spinner /> : null} Stop
-              </button>
-            )}
-            <button className="btn-ghost h-9" onClick={onClose}>Close</button>
-          </div>
-        </div>
+    <div className="space-y-4">
+      {backLink}
 
-        <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-5">
-          <KpiCard label="Total Shoppers" value={d.total_shoppers} accent="brand" />
-          <KpiCard label="Sent" value={d.sent} accent="sky" />
-          <KpiCard label="Interacted" value={d.interacted} accent="indigo" />
-          <KpiCard label="Accepted/Declined" value={d.accepted_or_declined} accent="emerald" />
-          <KpiCard label="No Response" value={d.no_response} accent="amber" />
-          <KpiCard label="Bounced" value={d.bounced} accent="rose" />
-          <KpiCard label="Failed" value={d.failed} accent="rose" />
-          <KpiCard label="Stopped" value={d.stopped} accent="slate" />
-          <KpiCard label="Pending" value={d.pending} accent="slate" />
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-bold text-slate-900 dark:text-white">{data.name}</h1>
+            <Badge className={STATUS_BADGE[data.status] || STATUS_BADGE.draft}>{cap(data.status)}</Badge>
+          </div>
+          <p className="mt-1 text-sm text-slate-400">
+            {data.campaign_name} · {data.shop_name} · every {data.wait_days} day(s) · up to {data.max_steps} emails/shopper
+            {data.batch_size ? ` · batch of ${data.batch_size}, ${data.total_iterations} iteration(s)` : ""}
+          </p>
         </div>
+        <div className="flex flex-wrap gap-2">
+          {(data.status === "draft" || data.status === "paused" || data.status === "stopped") && (
+            <button className="btn-primary h-9" onClick={() => act("start")} disabled={!!busy}>
+              {busy === "start" ? <Spinner /> : null} {data.status === "paused" ? "Resume via Start" : "Start"}
+            </button>
+          )}
+          {(data.status === "active" || data.status === "scheduled") && (
+            <button className="btn-secondary h-9" onClick={() => act("pause")} disabled={!!busy}>
+              {busy === "pause" ? <Spinner /> : null} Pause
+            </button>
+          )}
+          {data.status === "paused" && (
+            <button className="btn-primary h-9" onClick={() => act("resume")} disabled={!!busy}>
+              {busy === "resume" ? <Spinner /> : null} Resume
+            </button>
+          )}
+          {["active", "scheduled", "paused"].includes(data.status) && (
+            <button className="btn-secondary h-9 text-rose-600" onClick={() => act("stop")} disabled={!!busy}>
+              {busy === "stop" ? <Spinner /> : null} Stop
+            </button>
+          )}
+        </div>
+      </div>
 
-        <div className="mt-5 overflow-x-auto rounded-lg border border-slate-100 dark:border-slate-800">
-          <table className="min-w-full text-sm">
-            <thead className="border-b border-slate-100 dark:border-slate-800">
-              <tr>
-                <th className="th">Shopper</th>
-                <th className="th text-center">Step</th>
-                <th className="th">Status</th>
-                <th className="th">Last Event</th>
-                <th className="th hidden lg:table-cell">Last Sent</th>
-                <th className="th hidden lg:table-cell">Next Action</th>
-                <th className="th">Preview</th>
+      <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
+        <KpiCard label="Total Shoppers" value={d.total_shoppers} accent="brand" />
+        <KpiCard label="Sent" value={d.sent} accent="sky" />
+        <KpiCard label="Interacted" value={d.interacted} accent="indigo" />
+        <KpiCard label="Accepted/Declined" value={d.accepted_or_declined} accent="emerald" />
+        <KpiCard label="No Response" value={d.no_response} accent="amber" />
+        <KpiCard label="Bounced" value={d.bounced} accent="rose" />
+        <KpiCard label="Failed" value={d.failed} accent="rose" />
+        <KpiCard label="Stopped" value={d.stopped} accent="slate" />
+        <KpiCard label="Pending" value={d.pending} accent="slate" />
+      </div>
+
+      <div className="card overflow-x-auto !p-0">
+        <table className="min-w-full text-sm">
+          <thead className="border-b border-slate-100 dark:border-slate-800">
+            <tr>
+              <th className="th">Shopper</th>
+              <th className="th text-center">Step</th>
+              <th className="th">Status</th>
+              <th className="th">Last Event</th>
+              <th className="th hidden lg:table-cell">Last Sent</th>
+              <th className="th hidden lg:table-cell">Next Action</th>
+              <th className="th">Preview</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
+            {data.shoppers.map((s: any) => (
+              <tr key={s.id}>
+                <td className="td font-medium text-slate-800 dark:text-slate-100">
+                  {s.shopper_name}
+                  <div className="text-[11px] font-normal text-slate-400">{s.shopper_email}</div>
+                </td>
+                <td className="td text-center">{s.current_step} / {data.max_steps}</td>
+                <td className="td">
+                  <Badge className={STATE_BADGE[s.status] || STATE_BADGE.pending}>{cap(s.status)}</Badge>
+                </td>
+                <td className="td text-slate-500">{s.last_event ? cap(s.last_event) : "—"}</td>
+                <td className="td hidden text-slate-500 lg:table-cell">{s.last_email_sent_at ? fmtDateTime(s.last_email_sent_at) : "—"}</td>
+                <td className="td hidden text-slate-500 lg:table-cell">{s.next_action_at ? fmtDateTime(s.next_action_at) : "—"}</td>
+                <td className="td">
+                  <select
+                    className="input h-8 w-28 text-xs"
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) setPreviewFor({ shopperId: s.shopper_id, step: Number(e.target.value) });
+                      e.target.value = "";
+                    }}
+                  >
+                    <option value="">View…</option>
+                    {[1, 2, 3].map((st) => (
+                      <option key={st} value={st}>Step {st}</option>
+                    ))}
+                  </select>
+                </td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
-              {data.shoppers.map((s: any) => (
-                <tr key={s.id}>
-                  <td className="td font-medium text-slate-800 dark:text-slate-100">
-                    {s.shopper_name}
-                    <div className="text-[11px] font-normal text-slate-400">{s.shopper_email}</div>
-                  </td>
-                  <td className="td text-center">{s.current_step} / {data.max_steps}</td>
-                  <td className="td">
-                    <Badge className={STATE_BADGE[s.status] || STATE_BADGE.pending}>{cap(s.status)}</Badge>
-                  </td>
-                  <td className="td text-slate-500">{s.last_event ? cap(s.last_event) : "—"}</td>
-                  <td className="td hidden text-slate-500 lg:table-cell">{s.last_email_sent_at ? fmtDateTime(s.last_email_sent_at) : "—"}</td>
-                  <td className="td hidden text-slate-500 lg:table-cell">{s.next_action_at ? fmtDateTime(s.next_action_at) : "—"}</td>
-                  <td className="td">
-                    <select
-                      className="input h-8 w-28 text-xs"
-                      value=""
-                      onChange={(e) => {
-                        if (e.target.value) setPreviewFor({ shopperId: s.shopper_id, step: Number(e.target.value) });
-                        e.target.value = "";
-                      }}
-                    >
-                      <option value="">View…</option>
-                      {[1, 2, 3].map((st) => (
-                        <option key={st} value={st}>Step {st}</option>
-                      ))}
-                    </select>
-                  </td>
-                </tr>
-              ))}
-              {data.shoppers.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="td py-8 text-center text-slate-400">No shoppers in this automation.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+            ))}
+            {data.shoppers.length === 0 && (
+              <tr>
+                <td colSpan={7} className="td py-8 text-center text-slate-400">No shoppers in this automation.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
 
       {previewFor && (
         <EmailPreviewModal
-          automationId={automationId}
+          automationId={automationId!}
           shopperId={previewFor.shopperId}
           step={previewFor.step}
           onClose={() => setPreviewFor(null)}
