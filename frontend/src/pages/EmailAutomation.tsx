@@ -216,6 +216,15 @@ function AutomationBuilder({
     setSelected(new Set());
   }, [shopId]);
 
+  // Default to everyone the AI recommended selected — most of the time
+  // that's exactly who should get the automation, and it's faster to
+  // deselect the few exceptions than to hand-pick from a list of 20.
+  useEffect(() => {
+    if (recs.data?.recommendations) {
+      setSelected(new Set(recs.data.recommendations.map((r: any) => r.shopper_id)));
+    }
+  }, [recs.data]);
+
   const templatesByName = useMemo(() => {
     const map: Record<string, any> = {};
     for (const t of templatesApi.data?.items || []) map[t.name] = t;
@@ -367,13 +376,33 @@ function AutomationBuilder({
         </div>
 
         <div className="mt-4">
-          <div className="label">AI-recommended shoppers for this shop</div>
+          <div className="flex items-center justify-between">
+            <div className="label !mb-0">AI-recommended shoppers for this shop</div>
+            {!!candidates.length && (
+              <div className="flex gap-2 text-[11px]">
+                <button
+                  type="button"
+                  className="font-semibold text-brand-600 hover:underline dark:text-brand-400"
+                  onClick={() => setSelected(new Set(candidates.map((r: any) => r.shopper_id)))}
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  className="font-semibold text-slate-400 hover:underline"
+                  onClick={() => setSelected(new Set())}
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+          </div>
           {shopId && recs.loading && !recs.data ? (
-            <div className="flex items-center gap-2 text-sm text-slate-400"><Spinner /> AI is matching shoppers…</div>
+            <div className="mt-1.5 flex items-center gap-2 text-sm text-slate-400"><Spinner /> AI is matching shoppers…</div>
           ) : !candidates.length ? (
-            <p className="text-sm text-slate-400">No candidates found. Try a different shop.</p>
+            <p className="mt-1.5 text-sm text-slate-400">No candidates found. Try a different shop.</p>
           ) : (
-            <div className="max-h-64 space-y-1.5 overflow-y-auto rounded-lg border border-slate-100 p-2 dark:border-slate-800">
+            <div className="mt-1.5 max-h-64 space-y-1.5 overflow-y-auto rounded-lg border border-slate-100 p-2 dark:border-slate-800">
               {candidates.map((r: any) => (
                 <label
                   key={r.shopper_id}
