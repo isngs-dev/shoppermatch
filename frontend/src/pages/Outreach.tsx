@@ -182,6 +182,7 @@ type ShopperOption = {
 const TABS = [
   { key: "send", label: "Send Invitation" },
   { key: "templates", label: "Templates" },
+  { key: "batch_automation", label: "Batch Automation" },
   { key: "batch", label: "Email Automation" },
 ] as const;
 
@@ -860,22 +861,16 @@ export function Outreach() {
         </div>
       )}
 
-      {activeTab === "batch" && (
-        <div className="space-y-8">
-          <div>
-            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-400">Batch Automation</h2>
-            <div className="mt-3">
-              <EmailAutomationBatchPanel compact />
-            </div>
-          </div>
+      {activeTab === "batch_automation" && (
+        <div className="card p-5">
+          <EmailAutomationBatchPanel compact />
+        </div>
+      )}
 
-          <div className="border-t border-slate-200 pt-8 dark:border-slate-800">
-            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-400">Sequences</h2>
-            <div className="mt-3 space-y-4">
-              <BulkSendStatusCard />
-              <EmailAutomationPanel compact />
-            </div>
-          </div>
+      {activeTab === "batch" && (
+        <div className="space-y-4">
+          <BulkSendStatusCard />
+          <EmailAutomationPanel compact />
         </div>
       )}
 
