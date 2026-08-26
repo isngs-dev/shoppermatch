@@ -455,6 +455,16 @@ class EmailAutomation(Base):
     wait_days: Mapped[int] = mapped_column(Integer, default=2)
     max_steps: Mapped[int] = mapped_column(Integer, default=3)
 
+    # Batch emailing: NULL (default) sends every selected shopper's step 1
+    # immediately on Start, same as always. Set batch_size to instead
+    # release shoppers in waves of that size, `wait_days` apart (the same
+    # cadence already used for per-shopper step advancement), for up to
+    # `total_iterations` waves — anyone beyond batch_size * total_iterations
+    # stays queued but is never sent. Each shopper's own step 1/2/3 reminder
+    # sequence then proceeds independently from whenever their wave sent.
+    batch_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_iterations: Mapped[int] = mapped_column(Integer, default=1)
+
     # NULL = start immediately on /start. Set = don't send anything before
     # this instant (upcoming-campaign pre-configuration, spec section 13).
     scheduled_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

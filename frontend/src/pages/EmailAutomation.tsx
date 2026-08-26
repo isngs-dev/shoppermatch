@@ -188,6 +188,13 @@ function AutomationBuilder({
   const [shopId, setShopId] = useState("");
   const [name, setName] = useState("");
   const [waitDays, setWaitDays] = useState(2);
+  // Batch emailing: off by default (everyone selected gets step 1 on
+  // Start, same as before this existed). Turning it on releases shoppers
+  // in waves of `batchSize`, `waitDays` apart, for up to `iterations`
+  // waves — anyone beyond batchSize * iterations stays queued, never sent.
+  const [batchEnabled, setBatchEnabled] = useState(false);
+  const [batchSize, setBatchSize] = useState(10);
+  const [iterations, setIterations] = useState(3);
   const [scheduleUpcoming, setScheduleUpcoming] = useState(campaignType === "upcoming");
   const [scheduledAt, setScheduledAt] = useState("");
   const templatesApi = useApi(() => api.emailTemplates());
@@ -247,6 +254,8 @@ function AutomationBuilder({
         step3_template_id: stepTemplates[3] || null,
         wait_days: waitDays,
         scheduled_start_at: scheduleUpcoming && scheduledAt ? new Date(scheduledAt).toISOString() : null,
+        batch_size: batchEnabled ? batchSize : null,
+        total_iterations: batchEnabled ? iterations : 1,
       });
       await api.addAutomationShoppers(automation.id, Array.from(selected));
       toast(`Automation "${name.trim()}" created with ${selected.size} shopper(s). Review and Start it.`, "success");
@@ -294,6 +303,44 @@ function AutomationBuilder({
               onChange={(e) => setScheduledAt(e.target.value)}
             />
           </div>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+          <label className="label flex items-center gap-2">
+            <input type="checkbox" checked={batchEnabled} onChange={(e) => setBatchEnabled(e.target.checked)} />
+            Batch emailing
+          </label>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Off sends step 1 to every selected shopper immediately on Start. On releases them in waves instead —
+            {" "}{batchSize} shopper(s) every {waitDays} day(s), for {iterations} iteration(s) (
+            {batchSize * iterations} shopper(s) total reached; anyone beyond that stays queued, unsent).
+          </p>
+          {batchEnabled && (
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="label">Batch size (shoppers per wave)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={1000}
+                  className="input"
+                  value={batchSize}
+                  onChange={(e) => setBatchSize(Math.max(1, Number(e.target.value) || 1))}
+                />
+              </div>
+              <div>
+                <label className="label">Iterations (number of waves)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={52}
+                  className="input"
+                  value={iterations}
+                  onChange={(e) => setIterations(Math.max(1, Number(e.target.value) || 1))}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="mt-4">
@@ -412,6 +459,7 @@ function AutomationDetail({ automationId, onClose, onChanged }: { automationId: 
             </div>
             <p className="text-xs text-slate-400">
               {data.campaign_name} · {data.shop_name} · every {data.wait_days} day(s) · up to {data.max_steps} emails/shopper
+              {data.batch_size ? ` · batch of ${data.batch_size}, ${data.total_iterations} iteration(s)` : ""}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

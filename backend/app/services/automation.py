@@ -157,6 +157,8 @@ async def create_automation(
     step_template_ids: dict[int, uuid.UUID | None],
     wait_days: int,
     scheduled_start_at: datetime | None,
+    batch_size: int | None = None,
+    total_iterations: int = 1,
 ) -> EmailAutomation:
     defaults = await ensure_default_templates(session)
     default_by_step = {1: defaults["Initial Invitation"], 2: defaults["Reminder"], 3: defaults["Final Reminder"]}
@@ -167,6 +169,8 @@ async def create_automation(
         name=name,
         status=AutomationStatus.DRAFT,
         wait_days=max(1, wait_days),
+        batch_size=batch_size,
+        total_iterations=max(1, total_iterations),
         scheduled_start_at=scheduled_start_at,
         created_by=user.email,
         step1_template_id=step_template_ids.get(1) or default_by_step[1].id,
@@ -232,10 +236,25 @@ async def start_automation(session: AsyncSession, automation: EmailAutomation, u
 
     future_start = automation.scheduled_start_at is not None and automation.scheduled_start_at > now()
     automation.status = AutomationStatus.SCHEDULED if future_start else AutomationStatus.ACTIVE
+    base_start = automation.scheduled_start_at if future_start else now()
 
-    for state in automation.shopper_states:
-        if state.status in (ShopperAutomationStatus.PENDING,):
-            state.next_action_at = automation.scheduled_start_at if future_start else now()
+    pending = [s for s in automation.shopper_states if s.status == ShopperAutomationStatus.PENDING]
+
+    if automation.batch_size:
+        # Release shoppers in waves of `batch_size`, `wait_days` apart (the
+        # same cadence already used for per-shopper step advancement),
+        # capped at `total_iterations` waves. Anyone beyond that many
+        # shoppers stays pending with no next_action_at — queued, never
+        # sent — rather than silently falling back to "send to everyone".
+        max_release = automation.batch_size * automation.total_iterations
+        for i, state in enumerate(pending):
+            if i >= max_release:
+                continue
+            wave = i // automation.batch_size
+            state.next_action_at = base_start + timedelta(days=automation.wait_days * wave)
+    else:
+        for state in pending:
+            state.next_action_at = base_start
 
     await record_audit(
         session,
@@ -244,7 +263,11 @@ async def start_automation(session: AsyncSession, automation: EmailAutomation, u
         entity_type="email_automation",
         entity_id=str(automation.id),
         summary=f"Automation '{automation.name}' started ({automation.status})",
-        meta={"scheduled_start_at": automation.scheduled_start_at.isoformat() if automation.scheduled_start_at else None},
+        meta={
+            "scheduled_start_at": automation.scheduled_start_at.isoformat() if automation.scheduled_start_at else None,
+            "batch_size": automation.batch_size,
+            "total_iterations": automation.total_iterations,
+        },
     )
     return automation
 
@@ -501,15 +524,16 @@ async def process_due_automations() -> int:
     due = now()
     async with AsyncSessionLocal() as session:
         # 1) Flip any scheduled automation whose start time has arrived.
+        # Every pending shopper's next_action_at was already set correctly
+        # (per-wave, for batch_size automations) back in start_automation() —
+        # this only needs to flip the status, not touch next_action_at again,
+        # or a later wave's timing would collapse back to "now".
         scheduled_stmt = select(EmailAutomation).where(
             EmailAutomation.status == AutomationStatus.SCHEDULED,
             EmailAutomation.scheduled_start_at <= due,
-        ).options(selectinload(EmailAutomation.shopper_states))
+        )
         for automation in (await session.execute(scheduled_stmt)).scalars().all():
             automation.status = AutomationStatus.ACTIVE
-            for state in automation.shopper_states:
-                if state.status == ShopperAutomationStatus.PENDING:
-                    state.next_action_at = due
         await session.commit()
 
         # 2) Process every due shopper-state under an active automation.

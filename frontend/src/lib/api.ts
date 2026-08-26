@@ -257,6 +257,8 @@ export const api = {
     step3_template_id?: string | null;
     wait_days?: number;
     scheduled_start_at?: string | null;
+    batch_size?: number | null;
+    total_iterations?: number;
   }) => request("/api/automations", { method: "POST", body }),
   addAutomationShoppers: (id: string, shopperIds: string[]) =>
     request(`/api/automations/${id}/shoppers`, { method: "POST", body: { shopper_ids: shopperIds } }),

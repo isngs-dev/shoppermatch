@@ -37,6 +37,11 @@ class AutomationCreate(BaseModel):
     step3_template_id: str | None = None
     wait_days: int = Field(default=2, ge=1, le=14)
     scheduled_start_at: datetime | None = None
+    # Batch emailing: leave unset to send every selected shopper's step 1
+    # immediately (default behavior). Set batch_size to release shoppers in
+    # waves of that size, wait_days apart, for up to total_iterations waves.
+    batch_size: int | None = Field(default=None, ge=1, le=1000)
+    total_iterations: int = Field(default=1, ge=1, le=52)
 
 
 class ShoppersIn(BaseModel):
@@ -101,6 +106,8 @@ def _automation_out(a: EmailAutomation, with_states: bool = True) -> dict:
         "status": a.status,
         "wait_days": a.wait_days,
         "max_steps": a.max_steps,
+        "batch_size": a.batch_size,
+        "total_iterations": a.total_iterations,
         "scheduled_start_at": iso(a.scheduled_start_at),
         "step1_template_id": str(a.step1_template_id) if a.step1_template_id else None,
         "step2_template_id": str(a.step2_template_id) if a.step2_template_id else None,
@@ -153,7 +160,8 @@ async def create_automation(
         step_ids[step] = _parse_uuid(raw, f"step{step}_template") if raw else None
 
     automation = await engine.create_automation(
-        session, user, campaign, shop, body.name.strip(), step_ids, body.wait_days, body.scheduled_start_at
+        session, user, campaign, shop, body.name.strip(), step_ids, body.wait_days, body.scheduled_start_at,
+        batch_size=body.batch_size, total_iterations=body.total_iterations,
     )
     await session.commit()
     automation = await _load(session, automation.id)

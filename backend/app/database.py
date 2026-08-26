@@ -5,6 +5,7 @@ demo runs with zero external services locally, while production uses Postgres.
 """
 from __future__ import annotations
 
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import (
     AsyncAttrs,
     AsyncSession,
@@ -56,3 +57,39 @@ async def init_models() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _retrofit_columns(conn)
+
+
+# --------------------------------------------------------------------------- #
+# Retrofit columns onto tables that already existed before a model gained a
+# new column. `create_all()` above only creates missing TABLES, never adds
+# columns to ones that already exist — harmless for a brand-new database, but
+# on any database that predates a given column (including the live deploy,
+# which never runs Alembic — it just starts uvicorn directly) that column
+# would otherwise silently never exist, and every read/write through the ORM
+# for it would fail. Declare a new nullable column here once and it retrofits
+# itself on the next restart, on any database, no separate migration needed.
+# --------------------------------------------------------------------------- #
+_RETROFIT_COLUMNS: list[tuple[str, str, str]] = [
+    # (table, column, DDL type fragment — must be valid on both SQLite and
+    # Postgres, e.g. "INTEGER", "INTEGER DEFAULT 1", "VARCHAR(255)")
+    ("email_automations", "batch_size", "INTEGER"),
+    ("email_automations", "total_iterations", "INTEGER DEFAULT 1"),
+]
+
+
+async def _retrofit_columns(conn) -> None:
+    def _find_missing(sync_conn) -> list[tuple[str, str, str]]:
+        inspector = inspect(sync_conn)
+        table_names = set(inspector.get_table_names())
+        missing = []
+        for table, column, ddl_type in _RETROFIT_COLUMNS:
+            if table not in table_names:
+                continue  # brand-new DB — create_all() above already covered it
+            existing_columns = {c["name"] for c in inspector.get_columns(table)}
+            if column not in existing_columns:
+                missing.append((table, column, ddl_type))
+        return missing
+
+    for table, column, ddl_type in await conn.run_sync(_find_missing):
+        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
