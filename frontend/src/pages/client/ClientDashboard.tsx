@@ -237,12 +237,6 @@ export function ClientDashboard() {
           </div>
         )}
       </div>
-
-      <div className="text-center">
-        <Link to="/client/campaigns" className="btn-primary inline-flex px-6 py-2.5">
-          View My Campaigns
-        </Link>
-      </div>
     </div>
   );
 }
