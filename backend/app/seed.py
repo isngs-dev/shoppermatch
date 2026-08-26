@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import random
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -20,6 +21,7 @@ from .config import settings
 from .database import AsyncSessionLocal, Base, engine, init_models
 from .models import (
     Campaign,
+    Client,
     EventType,
     Invitation,
     InvitationEvent,
@@ -70,6 +72,30 @@ async def _build(session) -> None:
     )
     session.add(admin)
 
+    # ---------------- Clients (Client Portal) ----------------
+    # One Client row per brand, each with a company matching a campaign's
+    # client_name below. Nike also gets a demo client-portal login so the
+    # Client Portal has something to sign into out of the box — this used to
+    # be a one-time Alembic migration backfill, but that only ever ran
+    # against a pre-existing SQLite dev database; a fresh deploy (Render/
+    # Railway, migrations never invoked) needs it created here instead.
+    # Explicit ids (rather than relying on Campaign.client_id, which has no
+    # ORM relationship attribute defined) so they're known immediately for
+    # wiring into the campaigns below, without an extra flush round-trip.
+    client_nike = Client(id=uuid.uuid4(), company_name="Nike", status="active")
+    client_starbucks = Client(id=uuid.uuid4(), company_name="Starbucks", status="active")
+    client_croma = Client(id=uuid.uuid4(), company_name="Croma (Tata)", status="active")
+    session.add_all([client_nike, client_starbucks, client_croma])
+
+    demo_client_user = User(
+        name="Nike Brand Team",
+        email="client@nike-demo.example",
+        role="client",
+        password_hash=hash_password("client-demo-2026"),
+        client=client_nike,
+    )
+    session.add(demo_client_user)
+
     # ---------------- Shoppers ----------------
     shoppers: list[Shopper] = []
     for name, email, city, cats, avail, source, rating, completion, prev, code in SHOPPERS:
@@ -99,6 +125,7 @@ async def _build(session) -> None:
     nike = Campaign(
         name="Nike Mumbai Store Audit",
         client_name="Nike",
+        client_id=client_nike.id,
         description="Retail experience & compliance audit across Nike stores in Maharashtra.",
         status="active",
         deadline=datetime(2026, 8, 25, 18, 0, tzinfo=timezone.utc),
@@ -106,6 +133,7 @@ async def _build(session) -> None:
     starbucks = Campaign(
         name="Starbucks Pune Experience Audit",
         client_name="Starbucks",
+        client_id=client_starbucks.id,
         description="Service quality and store experience audit for Pune cafes.",
         status="active",
         deadline=datetime(2026, 9, 5, 18, 0, tzinfo=timezone.utc),
@@ -113,6 +141,7 @@ async def _build(session) -> None:
     croma = Campaign(
         name="Croma Electronics Mystery Shop",
         client_name="Croma (Tata)",
+        client_id=client_croma.id,
         description="Electronics retail mystery shopping across metro stores.",
         status="active",
         deadline=datetime(2026, 9, 12, 18, 0, tzinfo=timezone.utc),
