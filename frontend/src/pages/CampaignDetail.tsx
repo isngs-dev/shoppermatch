@@ -424,12 +424,17 @@ function RecommendationsTab({
 
   const selectedShop = shops.data?.items.find((s: any) => s.id === shopId);
 
-  async function runMatching() {
+  // Accepts an explicit radius so callers that just changed the radius (e.g.
+  // Expand Search Radius) can re-run immediately with the new value, rather
+  // than reading the `radius` state — which wouldn't have committed yet in
+  // the same handler (setState is async), so the request would silently go
+  // out with the OLD radius even though the input already shows the new one.
+  async function runMatching(radiusOverride?: number) {
     if (!shopId) return;
     setRunning(true);
     setRunError(null);
     try {
-      const r = await api.aiShopRecommendations(campaignId, shopId, { limit: 20, radius });
+      const r = await api.aiShopRecommendations(campaignId, shopId, { limit: 20, radius: radiusOverride ?? radius });
       setResult(r);
       setSelected(new Set());
     } catch (e: any) {
@@ -437,6 +442,12 @@ function RecommendationsTab({
     } finally {
       setRunning(false);
     }
+  }
+
+  function expandRadius() {
+    const next = radius + 25;
+    setRadius(next);
+    runMatching(next);
   }
 
   function toggleSelect(id: string) {
@@ -528,7 +539,7 @@ function RecommendationsTab({
             Required shoppers <span className="font-semibold text-slate-700 dark:text-slate-200">{required}</span>
           </span>
         </div>
-        <button className="btn-primary" onClick={runMatching} disabled={running || !shopId}>
+        <button className="btn-primary" onClick={() => runMatching()} disabled={running || !shopId}>
           {running ? <Spinner /> : <IconSparkles width={16} height={16} />}
           {running ? "Analyzing shopper profiles…" : result ? "🔄 Re-run Analysis" : "✨ Run AI Matching"}
         </button>
@@ -544,28 +555,10 @@ function RecommendationsTab({
 
       {result && (
         <>
-          <div className="card p-5">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              AI understood this requirement as
-            </div>
-            <p className="mt-1.5 text-sm italic text-slate-700 dark:text-slate-200">
-              "{result.requirement_summary}"
-            </p>
-            <div className="mt-3 text-xs text-slate-400">
-              Found {result.total_candidates} candidate shoppers · {result.eligible_count} eligible ·{" "}
-              {result.excluded.unavailable} unavailable · {result.excluded.inactive} inactive
-              {result.excluded.outside_radius ? ` · ${result.excluded.outside_radius} outside ${radius} km radius` : ""}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <MiniStat label="Analyzed" value={result.total_candidates} />
-            <MiniStat label="Eligible" value={result.eligible_count} />
-            <MiniStat label="Top" value={result.classification_counts.top_match} accent="text-emerald-600 dark:text-emerald-400" />
-            <MiniStat label="Strong" value={result.classification_counts.strong_match} accent="text-indigo-600 dark:text-indigo-400" />
-            <MiniStat label="Potential" value={result.classification_counts.potential_match} accent="text-amber-600 dark:text-amber-400" />
-          </div>
-
+          {/* Shown first, right where the controls are — this is the most
+              actionable thing to see immediately after a run: "you're short,
+              here's how to fix it," not something to discover after
+              scrolling past the requirement summary and stat tiles. */}
           {gap > 0 && (
             <div className="card border border-amber-200 p-5 dark:border-amber-900">
               <div className="flex items-center gap-2">
@@ -592,15 +585,38 @@ function RecommendationsTab({
                 Expand recruitment radius or include potential matches to close this gap.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
-                <button className="btn-secondary" onClick={() => { setRadius((r) => r + 25); }}>
-                  Expand Search Radius
+                <button className="btn-secondary" onClick={expandRadius} disabled={running}>
+                  {running ? <Spinner /> : null} Expand Search Radius (+25 km)
                 </button>
-                <button className="btn-secondary" onClick={() => setShowMore(true)}>
-                  Show Potential Matches
+                <button className="btn-secondary" onClick={() => setShowMore(true)} disabled={showMore}>
+                  {showMore ? "Showing Potential Matches" : "Show Potential Matches"}
                 </button>
               </div>
             </div>
           )}
+
+          <div className="card p-5">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              AI understood this requirement as
+            </div>
+            <p className="mt-1.5 text-sm italic text-slate-700 dark:text-slate-200">
+              "{result.requirement_summary}"
+            </p>
+            <div className="mt-3 text-xs text-slate-400">
+              Found {result.total_candidates} candidate shoppers · {result.eligible_count} eligible ·{" "}
+              {result.excluded.unavailable} unavailable · {result.excluded.inactive} inactive
+              {result.excluded.outside_radius ? ` · ${result.excluded.outside_radius} outside ${radius} km radius` : ""}
+              {result.excluded.requirements_not_met ? ` · ${result.excluded.requirements_not_met} don't meet campaign requirements` : ""}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <MiniStat label="Analyzed" value={result.total_candidates} />
+            <MiniStat label="Eligible" value={result.eligible_count} />
+            <MiniStat label="Top" value={result.classification_counts.top_match} accent="text-emerald-600 dark:text-emerald-400" />
+            <MiniStat label="Strong" value={result.classification_counts.strong_match} accent="text-indigo-600 dark:text-indigo-400" />
+            <MiniStat label="Potential" value={result.classification_counts.potential_match} accent="text-amber-600 dark:text-amber-400" />
+          </div>
 
           <div className="flex items-center justify-between">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
