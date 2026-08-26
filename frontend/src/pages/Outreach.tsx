@@ -7,7 +7,6 @@ import { Badge, CopyButton, KpiCard, Loading, Spinner, useToast } from "../compo
 import { api } from "../lib/api";
 import { classNames, fmtDateTime, statusBadgeClass } from "../lib/format";
 import { useApi } from "../lib/useApi";
-import { EmailAutomationPanel } from "./EmailAutomation";
 import { EmailTemplatesPanel } from "./EmailTemplates";
 
 // --------------------------- Built-in templates --------------------------- //
@@ -178,10 +177,13 @@ type ShopperOption = {
   classification: string | null;
 };
 
+// Email Automation deliberately isn't a tab here — it isn't scoped to one
+// campaign the way Send Invitation/Templates are (it runs across whichever
+// campaign+shop you pick from its own selector), so it lives as its own
+// separate top-level page instead of mixed into this campaign-context page.
 const TABS = [
   { key: "send", label: "Send Invitation" },
   { key: "templates", label: "Templates" },
-  { key: "batch", label: "Email Automation" },
 ] as const;
 
 // --------------------------------------------------------------------------- //
@@ -856,13 +858,6 @@ export function Outreach() {
       {activeTab === "templates" && (
         <div className="card p-5">
           <EmailTemplatesPanel compact />
-        </div>
-      )}
-
-      {activeTab === "batch" && (
-        <div className="space-y-4">
-          <BulkSendStatusCard />
-          <EmailAutomationPanel compact />
         </div>
       )}
 
@@ -1573,7 +1568,7 @@ function RecentEmails({ campaignId }: { campaignId: string }) {
   );
 }
 
-function BulkSendStatusCard() {
+export function BulkSendStatusCard() {
   const { data, loading } = useApi(() => api.clientEmailStatus());
   if (loading && !data) return null;
   return (

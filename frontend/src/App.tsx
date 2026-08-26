@@ -25,6 +25,7 @@ import { Shoppers } from "./pages/Shoppers";
 import { Shops } from "./pages/Shops";
 import { Tracking } from "./pages/Tracking";
 import { ClientDashboard } from "./pages/client/ClientDashboard";
+import { ClientEmailAutomation } from "./pages/client/ClientEmailAutomation";
 import { ClientInsights } from "./pages/client/ClientInsights";
 import { ClientReports } from "./pages/client/ClientReports";
 import { ClientProfile } from "./pages/client/ClientProfile";
@@ -98,11 +99,12 @@ export default function App() {
         <Route path="/client/shoppers" element={<Shoppers />} />
         <Route path="/client/recommendations" element={<Recommendations />} />
         <Route path="/client/outreach" element={<Outreach />} />
-        <Route path="/client/outreach/automations/:automationId" element={<AutomationDetailPage />} />
-        {/* Templates and Automation now live inside Outreach's tabs — these
-            redirects keep old bookmarks/links working. */}
+        <Route path="/client/email-automation/automations/:automationId" element={<AutomationDetailPage />} />
+        {/* Templates now lives inside Outreach's tabs — this redirect keeps
+            old bookmarks/links working. Email Automation is its own separate
+            top-level page, not campaign-scoped the way Outreach is. */}
         <Route path="/client/email-templates" element={<Navigate to="/client/outreach?tab=templates" replace />} />
-        <Route path="/client/email-automation" element={<Navigate to="/client/outreach?tab=batch" replace />} />
+        <Route path="/client/email-automation" element={<ClientEmailAutomation />} />
         <Route path="/client/insights" element={<ClientInsights />} />
         <Route path="/client/reports" element={<ClientReports />} />
         <Route path="/client/profile" element={<ClientProfile />} />

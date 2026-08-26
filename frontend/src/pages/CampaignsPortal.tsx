@@ -539,9 +539,10 @@ function CampaignCard({
   return (
     <div
       className={classNames(
-        "card flex flex-col p-5 transition hover:-translate-y-0.5 hover:shadow-lg",
+        "card flex cursor-pointer flex-col p-5 transition hover:-translate-y-0.5 hover:shadow-lg",
         selected ? "ring-2 ring-brand-500" : "hover:border-brand-300 dark:hover:border-brand-700"
       )}
+      onClick={() => onNavigate(`/client/campaigns/${c.id}`)}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-2.5">
@@ -549,6 +550,7 @@ function CampaignCard({
             type="checkbox"
             className="mt-1 h-4 w-4 shrink-0"
             checked={selected}
+            onClick={(e) => e.stopPropagation()}
             onChange={onToggleSelect}
             aria-label={`Select ${c.name}`}
           />
@@ -619,10 +621,7 @@ function CampaignCard({
         <span>{tab === "completed" ? "Completed" : "Deadline"} {fmtDate(c.deadline)}</span>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button className="btn-secondary" onClick={() => onNavigate(`/client/campaigns/${c.id}`)}>
-          View Campaign
-        </button>
+      <div className="mt-4 flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
         {tab === "active" && (
           <>
             <button className="btn-secondary" onClick={() => onNavigate(`/client/campaigns/${c.id}?tab=shops`)}>

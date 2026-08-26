@@ -18,7 +18,7 @@ import { Avatar, Logo } from "./ui";
 const PRIMARY_NAV = [
   { to: "/client/dashboard", label: "Dashboard" },
   { to: "/client/campaigns", label: "Campaigns" },
-  { to: "/client/outreach?tab=batch", label: "Email Automation" },
+  { to: "/client/email-automation", label: "Email Automation" },
 ];
 
 const MORE_NAV = [

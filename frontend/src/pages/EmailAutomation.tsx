@@ -122,7 +122,7 @@ export function EmailAutomationPanel({ compact }: { compact?: boolean }) {
           {automations.data.items.map((a: any) => (
             <button
               key={a.id}
-              onClick={() => navigate(`/client/outreach/automations/${a.id}`)}
+              onClick={() => navigate(`/client/email-automation/automations/${a.id}`)}
               className="card p-4 text-left transition hover:border-brand-300 dark:hover:border-brand-700"
             >
               <div className="flex items-start justify-between gap-2">
@@ -149,7 +149,7 @@ export function EmailAutomationPanel({ compact }: { compact?: boolean }) {
           onClose={() => setShowBuilder(false)}
           onCreated={(id) => {
             setShowBuilder(false);
-            navigate(`/client/outreach/automations/${id}`);
+            navigate(`/client/email-automation/automations/${id}`);
           }}
         />
       )}
@@ -433,7 +433,7 @@ function AutomationBuilder({
 }
 
 // ------------------------------ Detail / Dashboard ------------------------------ //
-// Its own routed page (/client/outreach/automations/:id) rather than a modal
+// Its own routed page (/client/email-automation/automations/:id) rather than a modal
 // over the Email Automation list — each automation gets a real URL you can
 // bookmark/share/refresh, and Back is genuine browser back navigation.
 export function AutomationDetailPage() {
@@ -466,7 +466,7 @@ export function AutomationDetailPage() {
   const backLink = (
     <button
       className="text-sm font-semibold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100"
-      onClick={() => navigate("/client/outreach?tab=batch")}
+      onClick={() => navigate("/client/email-automation")}
     >
       ← Back to Email Automation
     </button>
