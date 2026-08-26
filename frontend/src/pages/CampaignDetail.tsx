@@ -510,6 +510,46 @@ function RecommendationsTab({
         <ContextField label="Search Radius" value={`${radius} km`} />
       </div>
 
+      {/* Right at the top of the page, above Auto Assign / Outreach
+          Prioritization / the controls — this is the most actionable thing
+          to see immediately after a run: "you're short, here's how to fix
+          it," not something to discover after scrolling past other cards. */}
+      {result && gap > 0 && (
+        <div className="card border border-amber-200 p-5 dark:border-amber-900">
+          <div className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+              Recruitment Gap Detected
+            </h3>
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-3 text-sm">
+            <div>
+              <div className="text-xs text-slate-400">Required</div>
+              <div className="font-semibold text-slate-800 dark:text-slate-100">{required}</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-400">Top/Strong matches</div>
+              <div className="font-semibold text-slate-800 dark:text-slate-100">{topAndStrong.length}</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-400">Gap</div>
+              <div className="font-semibold text-rose-600 dark:text-rose-400">{gap} shopper(s)</div>
+            </div>
+          </div>
+          <p className="mt-3 text-sm text-slate-600 dark:text-slate-400">
+            Expand recruitment radius or include potential matches to close this gap.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className="btn-secondary" onClick={expandRadius} disabled={running}>
+              {running ? <Spinner /> : null} Expand Search Radius (+25 km)
+            </button>
+            <button className="btn-secondary" onClick={() => setShowMore(true)} disabled={showMore}>
+              {showMore ? "Showing Potential Matches" : "Show Potential Matches"}
+            </button>
+          </div>
+        </div>
+      )}
+
       <AutoAssignCard campaignId={campaignId} />
       {shopId && <OutreachPriorityCard campaignId={campaignId} shopId={shopId} />}
 
@@ -555,46 +595,6 @@ function RecommendationsTab({
 
       {result && (
         <>
-          {/* Shown first, right where the controls are — this is the most
-              actionable thing to see immediately after a run: "you're short,
-              here's how to fix it," not something to discover after
-              scrolling past the requirement summary and stat tiles. */}
-          {gap > 0 && (
-            <div className="card border border-amber-200 p-5 dark:border-amber-900">
-              <div className="flex items-center gap-2">
-                <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
-                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-                  Recruitment Gap Detected
-                </h3>
-              </div>
-              <div className="mt-2 grid grid-cols-3 gap-3 text-sm">
-                <div>
-                  <div className="text-xs text-slate-400">Required</div>
-                  <div className="font-semibold text-slate-800 dark:text-slate-100">{required}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-400">Top/Strong matches</div>
-                  <div className="font-semibold text-slate-800 dark:text-slate-100">{topAndStrong.length}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-400">Gap</div>
-                  <div className="font-semibold text-rose-600 dark:text-rose-400">{gap} shopper(s)</div>
-                </div>
-              </div>
-              <p className="mt-3 text-sm text-slate-600 dark:text-slate-400">
-                Expand recruitment radius or include potential matches to close this gap.
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button className="btn-secondary" onClick={expandRadius} disabled={running}>
-                  {running ? <Spinner /> : null} Expand Search Radius (+25 km)
-                </button>
-                <button className="btn-secondary" onClick={() => setShowMore(true)} disabled={showMore}>
-                  {showMore ? "Showing Potential Matches" : "Show Potential Matches"}
-                </button>
-              </div>
-            </div>
-          )}
-
           <div className="card p-5">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               AI understood this requirement as
