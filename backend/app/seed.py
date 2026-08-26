@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import random
 import sys
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -79,12 +78,9 @@ async def _build(session) -> None:
     # be a one-time Alembic migration backfill, but that only ever ran
     # against a pre-existing SQLite dev database; a fresh deploy (Render/
     # Railway, migrations never invoked) needs it created here instead.
-    # Explicit ids (rather than relying on Campaign.client_id, which has no
-    # ORM relationship attribute defined) so they're known immediately for
-    # wiring into the campaigns below, without an extra flush round-trip.
-    client_nike = Client(id=uuid.uuid4(), company_name="Nike", status="active")
-    client_starbucks = Client(id=uuid.uuid4(), company_name="Starbucks", status="active")
-    client_croma = Client(id=uuid.uuid4(), company_name="Croma (Tata)", status="active")
+    client_nike = Client(company_name="Nike", status="active")
+    client_starbucks = Client(company_name="Starbucks", status="active")
+    client_croma = Client(company_name="Croma (Tata)", status="active")
     session.add_all([client_nike, client_starbucks, client_croma])
 
     demo_client_user = User(
@@ -95,6 +91,15 @@ async def _build(session) -> None:
         client=client_nike,
     )
     session.add(demo_client_user)
+
+    # Flush now so the clients are actually committed to the DB (and their
+    # ids assigned) before Campaign rows reference them by client_id below.
+    # Campaign.client_id is a plain FK column with no ORM relationship() to
+    # Client, so SQLAlchemy's unit-of-work has no dependency graph telling it
+    # to insert clients first — without this flush it may batch the Campaign
+    # inserts ahead of the Client inserts. SQLite doesn't enforce FK
+    # constraints by default so this went unnoticed there; Postgres does.
+    await session.flush()
 
     # ---------------- Shoppers ----------------
     shoppers: list[Shopper] = []
