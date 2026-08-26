@@ -9,11 +9,16 @@ import { Avatar, Logo } from "./ui";
 // Shops, Shoppers and Recommendations are deliberately not top-level nav
 // items — they only make sense scoped to one campaign (active/upcoming/
 // completed), so they live as tabs inside Campaign Detail instead of as
-// a separate, campaign-less view here.
+// a separate, campaign-less view here. Outreach (Send Invitation/Templates)
+// follows the same logic: it only makes sense in the context of one
+// campaign, so it's reached via each Campaign Detail's own Outreach tab
+// rather than as a campaign-less top-level item. Email Automation is the
+// one part of that page that isn't campaign-scoped (it runs sequences
+// across shoppers/shops directly), so it keeps its own top-level entry.
 const PRIMARY_NAV = [
   { to: "/client/dashboard", label: "Dashboard" },
   { to: "/client/campaigns", label: "Campaigns" },
-  { to: "/client/outreach", label: "Outreach" },
+  { to: "/client/outreach?tab=batch", label: "Email Automation" },
 ];
 
 const MORE_NAV = [
