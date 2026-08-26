@@ -25,7 +25,6 @@ from .routers import (
     admin_users,
     auth,
     automations,
-    batch_automations,
     campaigns,
     client_portal,
     dashboard,
@@ -43,7 +42,6 @@ from .routers import (
 )
 from .seed import maybe_seed
 from .services.automation import ensure_default_templates, run_automation_scheduler
-from .services.batch_automation import run_batch_automation_scheduler
 from .services.outbox import reset_stuck_jobs, run_outbox_worker
 
 
@@ -64,14 +62,12 @@ async def lifespan(app: FastAPI):
         await session.commit()
     worker = asyncio.create_task(run_outbox_worker(), name="shoppermatch-email-outbox")
     automation_worker = asyncio.create_task(run_automation_scheduler(), name="shoppermatch-automation-scheduler")
-    batch_automation_worker = asyncio.create_task(run_batch_automation_scheduler(), name="shoppermatch-batch-automation-scheduler")
     try:
         yield
     finally:
         worker.cancel()
         automation_worker.cancel()
-        batch_automation_worker.cancel()
-        for task in (worker, automation_worker, batch_automation_worker):
+        for task in (worker, automation_worker):
             try:
                 await task
             except asyncio.CancelledError:
@@ -116,7 +112,6 @@ app.include_router(integrations.router)
 app.include_router(ai.router)
 app.include_router(client_portal.router)
 app.include_router(automations.router)
-app.include_router(batch_automations.router)
 app.include_router(reports.router)
 app.include_router(admin_users.router)
 app.include_router(misc.router)

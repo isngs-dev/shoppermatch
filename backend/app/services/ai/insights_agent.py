@@ -18,7 +18,6 @@ from sqlalchemy.orm import selectinload
 
 from ...models import (
     AuditLog,
-    BatchAutomation,
     Campaign,
     Client,
     EmailAutomation,
@@ -327,18 +326,14 @@ async def answer_question(session: AsyncSession, question: str) -> dict:
     # ------------------------- Automations / sequences ------------------------- #
     if "automation" in q or "sequence" in q:
         seq_rows = (await session.execute(select(EmailAutomation.status, func.count(EmailAutomation.id)).group_by(EmailAutomation.status))).all()
-        batch_rows = (await session.execute(select(BatchAutomation.status, func.count(BatchAutomation.id)).group_by(BatchAutomation.status))).all()
         seq_counts = {s: int(n) for s, n in seq_rows}
-        batch_counts = {s: int(n) for s, n in batch_rows}
         seq_total = sum(seq_counts.values())
-        batch_total = sum(batch_counts.values())
         return {
             "answer": (
-                f"{seq_total} outreach sequence(s) ({seq_counts.get('active', 0)} active, {seq_counts.get('draft', 0)} draft) "
-                f"and {batch_total} batch automation(s) ({batch_counts.get('active', 0)} active, {batch_counts.get('draft', 0)} draft)."
+                f"{seq_total} outreach sequence(s) ({seq_counts.get('active', 0)} active, {seq_counts.get('draft', 0)} draft)."
             ),
             "intent": "automation_overview",
-            "data": {"sequences": seq_counts, "batch": batch_counts},
+            "data": {"sequences": seq_counts},
         }
 
     # ------------------------- Integrations ------------------------- #

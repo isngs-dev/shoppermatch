@@ -8,7 +8,6 @@ import { api } from "../lib/api";
 import { classNames, fmtDateTime, statusBadgeClass } from "../lib/format";
 import { useApi } from "../lib/useApi";
 import { EmailAutomationPanel } from "./EmailAutomation";
-import { EmailAutomationBatchPanel } from "./EmailAutomationBatch";
 import { EmailTemplatesPanel } from "./EmailTemplates";
 
 // --------------------------- Built-in templates --------------------------- //
@@ -182,7 +181,6 @@ type ShopperOption = {
 const TABS = [
   { key: "send", label: "Send Invitation" },
   { key: "templates", label: "Templates" },
-  { key: "batch_automation", label: "Batch Automation" },
   { key: "batch", label: "Email Automation" },
 ] as const;
 
@@ -858,12 +856,6 @@ export function Outreach() {
       {activeTab === "templates" && (
         <div className="card p-5">
           <EmailTemplatesPanel compact />
-        </div>
-      )}
-
-      {activeTab === "batch_automation" && (
-        <div className="card p-5">
-          <EmailAutomationBatchPanel compact />
         </div>
       )}
 

@@ -529,67 +529,6 @@ class ShopperAutomationStatus:
 
 
 # --------------------------------------------------------------------------- #
-# Batch (wave) automation — a deliberately separate concept from
-# EmailAutomation above. EmailAutomation re-messages the SAME shoppers over
-# up to 3 steps (initial -> reminder -> final reminder). BatchAutomation
-# instead expands reach over time: every `wait_days`, it emails the NEXT
-# `batch_size` shoppers from an AI-ranked candidate pool computed once at
-# creation, for `total_iterations` waves — never the same shopper twice.
-# --------------------------------------------------------------------------- #
-class BatchAutomation(Base):
-    __tablename__ = "batch_automations"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
-    campaign_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("campaigns.id", ondelete="CASCADE"), index=True
-    )
-    shop_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("shops.id", ondelete="CASCADE"), index=True
-    )
-    name: Mapped[str] = mapped_column(String(255))
-    # draft -> scheduled|active -> paused (resumable) -> stopped (terminal) -> completed (terminal)
-    status: Mapped[str] = mapped_column(String(30), default="draft", index=True)
-
-    template_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("email_templates.id"), nullable=True)
-
-    batch_size: Mapped[int] = mapped_column(Integer, default=10)
-    wait_days: Mapped[int] = mapped_column(Integer, default=2)
-    total_iterations: Mapped[int] = mapped_column(Integer, default=3)
-    current_iteration: Mapped[int] = mapped_column(Integer, default=0)
-
-    # Computed once at creation from the AI matching engine (highest score
-    # first) so every wave draws from a stable, ranked pool rather than
-    # re-running matching (and possibly reordering) on every tick.
-    candidate_shopper_ids: Mapped[list] = mapped_column(json_col(), default=list)
-    # Cumulative across every wave so far — the source of truth for "who's
-    # already been emailed by this automation", never re-sent.
-    sent_shopper_ids: Mapped[list] = mapped_column(json_col(), default=list)
-
-    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # NULL = start immediately on /start. Set = don't send anything before
-    # this instant (upcoming-campaign pre-configuration).
-    scheduled_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    created_by: Mapped[str] = mapped_column(String(255), default="system")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    campaign: Mapped["Campaign"] = relationship()
-    shop: Mapped["Shop"] = relationship()
-    template: Mapped["EmailTemplate | None"] = relationship()
-
-
-class BatchAutomationStatus:
-    DRAFT = "draft"
-    SCHEDULED = "scheduled"
-    ACTIVE = "active"
-    PAUSED = "paused"
-    STOPPED = "stopped"
-    COMPLETED = "completed"
-
-
-# --------------------------------------------------------------------------- #
 # Password reset tokens (forgot/reset password flow). Deliberately a
 # separate table rather than columns on User — a token is short-lived,
 # single-use, and irrelevant to the user's steady-state row.

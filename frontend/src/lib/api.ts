@@ -274,26 +274,6 @@ export const api = {
       body: { campaign_ids: campaignIds, shoppers_per_shop: shoppersPerShop, start_immediately: startImmediately },
     }),
 
-  // Batch (wave) Automation — separate module: emails the NEXT batch_size
-  // shoppers from a ranked pool every wait_days, for total_iterations waves.
-  batchAutomations: (campaignId?: string) => request("/api/batch-automations" + qs({ campaign_id: campaignId })),
-  batchAutomation: (id: string) => request(`/api/batch-automations/${id}`),
-  createBatchAutomation: (body: {
-    campaign_id: string;
-    shop_id: string;
-    name: string;
-    template_id?: string | null;
-    batch_size: number;
-    wait_days: number;
-    total_iterations: number;
-    scheduled_start_at?: string | null;
-  }) => request("/api/batch-automations", { method: "POST", body }),
-  batchAutomationPreview: (id: string) => request(`/api/batch-automations/${id}/preview`),
-  startBatchAutomation: (id: string) => request(`/api/batch-automations/${id}/start`, { method: "POST" }),
-  pauseBatchAutomation: (id: string) => request(`/api/batch-automations/${id}/pause`, { method: "POST" }),
-  resumeBatchAutomation: (id: string) => request(`/api/batch-automations/${id}/resume`, { method: "POST" }),
-  stopBatchAutomation: (id: string) => request(`/api/batch-automations/${id}/stop`, { method: "POST" }),
-
   // Bulk campaign status change
   bulkCampaignStatus: (campaignIds: string[], status: "active" | "upcoming" | "completed" | "cancelled") =>
     request("/api/campaigns/bulk/status", { method: "POST", body: { campaign_ids: campaignIds, status } }),
