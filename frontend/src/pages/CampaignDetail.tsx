@@ -1123,6 +1123,7 @@ function TrackingTab({ campaignId }: { campaignId: string }) {
               <th className="th text-center">Sent</th>
               <th className="th text-center">Opened</th>
               <th className="th text-center">Clicked</th>
+              <th className="th hidden xl:table-cell">Automation</th>
               <th className="th hidden lg:table-cell">Source</th>
             </tr>
           </thead>
@@ -1141,16 +1142,25 @@ function TrackingTab({ campaignId }: { campaignId: string }) {
                 <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.sent_at} /></div></td>
                 <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.opened_at} /></div></td>
                 <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.clicked_at} /></div></td>
+                <td className="td hidden xl:table-cell">
+                  {r.automation_id ? (
+                    <span className="badge bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                      {r.automation_name} · Step {r.automation_step}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </td>
                 <td className="td hidden lg:table-cell">
                   <span className="badge bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300">
-                    ISN Email
+                    {r.automation_id ? "Client Email / SendGrid" : "ISN Email"}
                   </span>
                 </td>
               </tr>
             ))}
             {data.items.length === 0 && (
               <tr>
-                <td colSpan={6} className="td py-10 text-center text-slate-400">
+                <td colSpan={7} className="td py-10 text-center text-slate-400">
                   No tracked invitations yet.
                 </td>
               </tr>

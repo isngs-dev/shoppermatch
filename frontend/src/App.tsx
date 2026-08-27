@@ -100,10 +100,9 @@ export default function App() {
         <Route path="/client/recommendations" element={<Recommendations />} />
         <Route path="/client/outreach" element={<Outreach />} />
         <Route path="/client/email-automation/automations/:automationId" element={<AutomationDetailPage />} />
-        {/* Templates now lives inside Outreach's tabs — this redirect keeps
-            old bookmarks/links working. Email Automation is its own separate
-            top-level page, not campaign-scoped the way Outreach is. */}
-        <Route path="/client/email-templates" element={<Navigate to="/client/outreach?tab=templates" replace />} />
+        {/* Templates now live on Email Automation's own Templates tab — this
+            redirect keeps old bookmarks/links working. */}
+        <Route path="/client/email-templates" element={<Navigate to="/client/email-automation?tab=templates" replace />} />
         <Route path="/client/email-automation" element={<ClientEmailAutomation />} />
         <Route path="/client/insights" element={<ClientInsights />} />
         <Route path="/client/reports" element={<ClientReports />} />

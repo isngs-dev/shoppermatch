@@ -7,7 +7,6 @@ import { Badge, CopyButton, KpiCard, Loading, Spinner, useToast } from "../compo
 import { api } from "../lib/api";
 import { classNames, fmtDateTime, statusBadgeClass } from "../lib/format";
 import { useApi } from "../lib/useApi";
-import { EmailTemplatesPanel } from "./EmailTemplates";
 
 // --------------------------- Built-in templates --------------------------- //
 const ASSIGNMENT_BUTTON =
@@ -181,14 +180,12 @@ type ShopperOption = {
   shopName?: string;
 };
 
-// Email Automation deliberately isn't a tab here — it isn't scoped to one
-// campaign the way Send Invitation/Templates are (it runs across whichever
-// campaign+shop you pick from its own selector), so it lives as its own
-// separate top-level page instead of mixed into this campaign-context page.
-const TABS = [
-  { key: "send", label: "Send Invitation" },
-  { key: "templates", label: "Templates" },
-] as const;
+// Template management lives on the Email Automation page (EmailTemplatesPanel,
+// shared from pages/EmailTemplates.tsx), not here — templates are consumed by
+// both manual sends and automation steps, so they don't belong to either
+// exclusively. Email Automation also isn't a tab here: unlike Send Invitation
+// it isn't scoped to one campaign (it runs across whichever campaign+shop you
+// pick from its own selector), so it stays a separate top-level page.
 
 // --------------------------------------------------------------------------- //
 // Shows invitations that were already approved (e.g. from AI Recommendations)
@@ -358,10 +355,9 @@ function PendingInvitationsPanel({
 
 export function Outreach() {
   const toast = useToast();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const preselectedCampaignId = searchParams.get("campaign") || "";
   const preselectedShopId = searchParams.get("shop") || "";
-  const activeTab = (searchParams.get("tab") as (typeof TABS)[number]["key"]) || "send";
 
   // Active and Upcoming campaigns are fetched together and shown in one
   // list — no manual bucket toggle. Completed campaigns never appear here
@@ -437,8 +433,6 @@ export function Outreach() {
   const emailStatus = useApi(() => api.clientEmailStatus());
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
   const singleMode = bulkSelected.size === 1;
-  const [batchSize, setBatchSize] = useState(50);
-  const [iterations, setIterations] = useState(1);
   const [bulkSending, setBulkSending] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ batch: number; totalBatches: number } | null>(null);
   const [bulkResult, setBulkResult] = useState<{ created: any[]; failed: any[] } | null>(null);
@@ -538,12 +532,6 @@ export function Outreach() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bulkSelected]);
 
-  useEffect(() => {
-    if (emailStatus.data?.bulk_email_batch_size) {
-      setBatchSize((prev) => Math.min(prev, emailStatus.data.bulk_email_batch_size) || Math.min(50, emailStatus.data.bulk_email_batch_size));
-    }
-  }, [emailStatus.data]);
-
   function toggleBulkSelected(id: string) {
     setBulkSelected((prev) => {
       const next = new Set(prev);
@@ -555,7 +543,10 @@ export function Outreach() {
 
   const maxBatchSize = emailStatus.data?.bulk_email_batch_size ?? 1000;
   const bulkSelectedIds = Array.from(bulkSelected);
-  const bulkWillSendCount = Math.min(bulkSelectedIds.length, batchSize * iterations);
+  // Every selected shopper is sent — batching by maxBatchSize below is purely
+  // an internal chunking detail (the backend's per-call limit), never a cap
+  // the client has to configure.
+  const bulkWillSendCount = bulkSelectedIds.length;
 
   async function sendBulk() {
     if (!campaignId || (!shopId && !isMultiShop) || bulkSelectedIds.length === 0) {
@@ -585,8 +576,8 @@ export function Outreach() {
 
     const batches: { shopId: string; shopperIds: string[] }[] = [];
     for (const g of groups) {
-      for (let i = 0; i < g.shopperIds.length; i += batchSize) {
-        batches.push({ shopId: g.shopId, shopperIds: g.shopperIds.slice(i, i + batchSize) });
+      for (let i = 0; i < g.shopperIds.length; i += maxBatchSize) {
+        batches.push({ shopId: g.shopId, shopperIds: g.shopperIds.slice(i, i + maxBatchSize) });
       }
     }
 
@@ -1005,34 +996,10 @@ export function Outreach() {
       <div>
         <h1 className="text-xl font-bold text-slate-900 dark:text-white">Outreach</h1>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          Send invitations, manage reusable templates, and run multi-step outreach sequences — all in one place.
+          Send invitations to AI-recommended shoppers and track responses in real time.
         </p>
       </div>
 
-      <div className="flex gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 dark:bg-slate-800/70">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setSearchParams(t.key === "send" ? {} : { tab: t.key })}
-            className={classNames(
-              "shrink-0 rounded-lg px-3.5 py-2 text-sm font-semibold transition",
-              activeTab === t.key
-                ? "bg-brand-600 text-white shadow"
-                : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100"
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === "templates" && (
-        <div className="card p-5">
-          <EmailTemplatesPanel compact />
-        </div>
-      )}
-
-      {activeTab === "send" && (
       <div className="grid gap-6 lg:grid-cols-5">
         {/* Left: selectors + composer */}
         <div className="space-y-4 lg:col-span-2">
@@ -1206,38 +1173,6 @@ export function Outreach() {
                 </>
               )}
 
-              {bulkSelected.size > 1 && (
-                <div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="label">Batch size</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={maxBatchSize}
-                        className="input"
-                        value={batchSize}
-                        onChange={(e) => setBatchSize(Math.max(1, Math.min(maxBatchSize, Number(e.target.value) || 1)))}
-                      />
-                    </div>
-                    <div>
-                      <label className="label">Iterations</label>
-                      <input
-                        type="number"
-                        min={1}
-                        className="input"
-                        value={iterations}
-                        onChange={(e) => setIterations(Math.max(1, Number(e.target.value) || 1))}
-                      />
-                    </div>
-                  </div>
-                  <p className="mt-1.5 text-[11px] text-slate-400">
-                    Will send to <span className="font-semibold text-slate-600 dark:text-slate-300">{bulkWillSendCount}</span> of{" "}
-                    {bulkSelected.size} selected, in {Math.ceil(bulkWillSendCount / batchSize) || 0} batch(es) of up to{" "}
-                    {batchSize} · max batch size {maxBatchSize} (backend limit).
-                  </p>
-                </div>
-              )}
               <div>
                 <label className="label">Template</label>
                 <select className="input" value={templateKey} onChange={(e) => applyTemplate(e.target.value)}>
@@ -1497,9 +1432,8 @@ export function Outreach() {
           )}
         </div>
       </div>
-      )}
 
-      {activeTab === "send" && <RecentEmails campaignId={campaignId} />}
+      <RecentEmails campaignId={campaignId} />
 
       {showSendConfirm && result && (
         <ConfirmModal

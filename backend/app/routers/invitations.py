@@ -267,6 +267,7 @@ async def list_invitations(
     shop_id: uuid.UUID | None = Query(default=None),
     status: str | None = Query(default=None),
     q: str | None = Query(default=None),
+    automation_only: bool = Query(default=False, description="Only invitations sent by an Email Automation sequence"),
     limit: int = Query(default=200, ge=1, le=1000),
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_operator),
@@ -291,6 +292,8 @@ async def list_invitations(
         stmt = stmt.join(Campaign, Invitation.campaign_id == Campaign.id).where(Campaign.client_id == user.client_id)
     if shop_id is not None:
         stmt = stmt.where(Invitation.shop_id == shop_id)
+    if automation_only:
+        stmt = stmt.where(Invitation.automation_id.is_not(None))
     if status:
         stmt = stmt.where(Invitation.status == status)
     if q:

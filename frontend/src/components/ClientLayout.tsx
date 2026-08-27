@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { classNames } from "../lib/format";
 import { useTheme } from "../lib/theme";
@@ -19,15 +18,9 @@ const PRIMARY_NAV = [
   { to: "/client/dashboard", label: "Dashboard" },
   { to: "/client/campaigns", label: "Campaigns" },
   { to: "/client/email-automation", label: "Email Automation" },
-];
-
-const MORE_NAV = [
   { to: "/client/insights", label: "Insights" },
   { to: "/client/reports", label: "Reports" },
-  { to: "/client/profile", label: "Profile" },
 ];
-
-const ALL_NAV = [...PRIMARY_NAV, ...MORE_NAV];
 
 // Deliberately a different shape from AdminLayout — a light top-nav SaaS
 // shell instead of a dark data-dense sidebar, per the brief: "The Client
@@ -46,19 +39,31 @@ export function ClientLayout() {
             {PRIMARY_NAV.map((n) => (
               <NavItem key={n.to} to={n.to} label={n.label} />
             ))}
-            <NavDropdown label="More" items={MORE_NAV} />
           </nav>
           <div className="ml-auto flex items-center gap-2">
             <button className="btn-ghost" onClick={toggle} aria-label="Toggle theme">
               {theme === "dark" ? <IconSun /> : <IconMoon />}
             </button>
-            <div className="hidden items-center gap-2 sm:flex">
+            {/* Profile & settings now live behind the account avatar itself,
+                not as a top-nav tab — clicking it always goes to the
+                logged-in client's own /client/profile (password change,
+                org info, danger zone), never anyone else's. */}
+            <NavLink
+              to="/client/profile"
+              className={({ isActive }) =>
+                classNames(
+                  "flex items-center gap-2 rounded-lg px-2 py-1.5 transition",
+                  isActive ? "bg-brand-50 dark:bg-brand-950" : "hover:bg-slate-100 dark:hover:bg-slate-900"
+                )
+              }
+              title="Profile & settings"
+            >
               <Avatar name={user?.name} className="h-8 w-8" />
-              <div className="leading-tight">
+              <div className="hidden leading-tight sm:block">
                 <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">{user?.name}</div>
                 <div className="text-[11px] text-slate-400">{user?.client_name}</div>
               </div>
-            </div>
+            </NavLink>
             <button className="btn-ghost" onClick={logout} aria-label="Log out" title="Log out">
               <IconLogout />
             </button>
@@ -66,7 +71,7 @@ export function ClientLayout() {
         </div>
         {/* Mobile nav row */}
         <nav className="flex gap-1 overflow-x-auto border-t border-slate-100 px-4 py-2 dark:border-slate-900 md:hidden">
-          {ALL_NAV.map((n) => (
+          {PRIMARY_NAV.map((n) => (
             <NavLink
               key={n.to}
               to={n.to}
@@ -107,62 +112,5 @@ function NavItem({ to, label }: { to: string; label: string }) {
     >
       {label}
     </NavLink>
-  );
-}
-
-function NavDropdown({ label, items }: { label: string; items: { to: string; label: string }[] }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const location = useLocation();
-  const active = items.some((i) => location.pathname.startsWith(i.to));
-
-  useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
-
-  useEffect(() => setOpen(false), [location.pathname]);
-
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className={classNames(
-          "flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-medium transition whitespace-nowrap",
-          active || open
-            ? "bg-brand-600 text-white"
-            : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-900"
-        )}
-      >
-        {label}
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className={classNames("transition", open && "rotate-180")}>
-          <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </button>
-      {open && (
-        <div className="absolute left-0 top-full z-30 mt-1 w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg dark:border-slate-700 dark:bg-slate-900">
-          {items.map((i) => (
-            <NavLink
-              key={i.to}
-              to={i.to}
-              className={({ isActive }) =>
-                classNames(
-                  "block rounded-lg px-3 py-2 text-sm font-medium transition",
-                  isActive
-                    ? "bg-brand-600 text-white"
-                    : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-900"
-                )
-              }
-            >
-              {i.label}
-            </NavLink>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
