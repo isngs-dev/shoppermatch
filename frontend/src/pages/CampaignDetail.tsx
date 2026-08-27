@@ -429,6 +429,12 @@ function RecommendationsTab({
       const r = await api.aiShopRecommendations(campaignId, shopId, { limit: 20, radius: radiusOverride ?? radius });
       setResult(r);
       setSelected(new Set());
+      // Zero Top/Strong matches would otherwise land on the "no candidates"
+      // empty state even though eligible people exist — auto-reveal
+      // potential/low matches immediately instead of requiring a separate
+      // "Show Potential Matches" click after every single run.
+      const hasTopOrStrong = (r.classification_counts.top_match ?? 0) + (r.classification_counts.strong_match ?? 0) > 0;
+      setShowMore(!hasTopOrStrong);
     } catch (e: any) {
       setRunError(e?.message || "AI matching failed");
     } finally {
