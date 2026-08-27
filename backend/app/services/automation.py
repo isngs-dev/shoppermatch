@@ -136,65 +136,114 @@ async def load_automation(session: AsyncSession, automation_id: uuid.UUID) -> Em
             selectinload(EmailAutomation.step2_template),
             selectinload(EmailAutomation.step3_template),
             selectinload(EmailAutomation.shopper_states).selectinload(ShopperAutomationState.shopper),
+            selectinload(EmailAutomation.shopper_states).selectinload(ShopperAutomationState.shop),
         )
     )
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def step_template(automation: EmailAutomation, step: int) -> EmailTemplate | None:
+async def step_template(session: AsyncSession, automation: EmailAutomation, step: int) -> EmailTemplate | None:
+    """Prefers the ordered step_template_ids array (any number of steps);
+    falls back to the fixed step1/2/3 columns for automations created
+    before that array existed."""
+    if automation.step_template_ids:
+        if not (1 <= step <= len(automation.step_template_ids)):
+            return None
+        tid = automation.step_template_ids[step - 1]
+        return await session.get(EmailTemplate, uuid.UUID(tid)) if tid else None
     return {1: automation.step1_template, 2: automation.step2_template, 3: automation.step3_template}.get(step)
 
 
 # --------------------------------------------------------------------------- #
 # Lifecycle: create / add shoppers / start / pause / resume / stop
 # --------------------------------------------------------------------------- #
+def _default_step_template(defaults: dict[str, EmailTemplate], step: int, total: int) -> EmailTemplate:
+    """Step 1 defaults to Initial Invitation, the last step to Final
+    Reminder, everything in between to Reminder — scales the same 3-role
+    pattern to however many steps a batch-emailing wave setup asks for."""
+    if step == 1:
+        return defaults["Initial Invitation"]
+    if step == total and total > 1:
+        return defaults["Final Reminder"]
+    return defaults["Reminder"]
+
+
 async def create_automation(
     session: AsyncSession,
     user: User,
     campaign: Campaign,
-    shop: Shop,
+    shop: Shop | None,
     name: str,
-    step_template_ids: dict[int, uuid.UUID | None],
+    step_template_ids: list[uuid.UUID | None],
     wait_days: int,
     scheduled_start_at: datetime | None,
     batch_size: int | None = None,
     total_iterations: int = 1,
 ) -> EmailAutomation:
+    """`shop=None` creates a campaign-wide automation — it spans every shop
+    in the campaign at once; each shopper's actual shop then comes from
+    their own ShopperAutomationState.shop_id (see add_shoppers).
+
+    `step_template_ids` is ordered (index 0 = step 1); its length becomes
+    max_steps. A None entry falls back to the role-appropriate default
+    template (see _default_step_template)."""
     defaults = await ensure_default_templates(session)
-    default_by_step = {1: defaults["Initial Invitation"], 2: defaults["Reminder"], 3: defaults["Final Reminder"]}
+    total_steps = max(1, len(step_template_ids))
+    resolved_ids = [
+        str(tid) if tid else str(_default_step_template(defaults, i + 1, total_steps).id)
+        for i, tid in enumerate(step_template_ids)
+    ]
 
     automation = EmailAutomation(
         campaign_id=campaign.id,
-        shop_id=shop.id,
+        shop_id=shop.id if shop else None,
         name=name,
         status=AutomationStatus.DRAFT,
         wait_days=max(1, wait_days),
+        max_steps=total_steps,
         batch_size=batch_size,
         total_iterations=max(1, total_iterations),
         scheduled_start_at=scheduled_start_at,
         created_by=user.email,
-        step1_template_id=step_template_ids.get(1) or default_by_step[1].id,
-        step2_template_id=step_template_ids.get(2) or default_by_step[2].id,
-        step3_template_id=step_template_ids.get(3) or default_by_step[3].id,
+        step_template_ids=resolved_ids,
+        # First 3 slots are mirrored into the legacy fixed columns too —
+        # cheap backward compatibility for any code still reading them.
+        step1_template_id=uuid.UUID(resolved_ids[0]) if len(resolved_ids) > 0 else None,
+        step2_template_id=uuid.UUID(resolved_ids[1]) if len(resolved_ids) > 1 else None,
+        step3_template_id=uuid.UUID(resolved_ids[2]) if len(resolved_ids) > 2 else None,
     )
     session.add(automation)
     await session.flush()
 
+    scope_label = f"{campaign.name} / {shop.shop_name}" if shop else f"{campaign.name} (all shops)"
     await record_audit(
         session,
         action="automation.created",
         actor=user.email,
         entity_type="email_automation",
         entity_id=str(automation.id),
-        summary=f"Email automation '{name}' created for {campaign.name} / {shop.shop_name}",
-        meta={"campaign": campaign.name, "shop": shop.shop_name, "wait_days": wait_days},
+        summary=f"Email automation '{name}' created for {scope_label}",
+        meta={"campaign": campaign.name, "shop": shop.shop_name if shop else None, "wait_days": wait_days},
     )
     return automation
 
 
 async def add_shoppers(
-    session: AsyncSession, automation: EmailAutomation, user: User, shopper_ids: list[uuid.UUID]
+    session: AsyncSession,
+    automation: EmailAutomation,
+    user: User,
+    shopper_ids: list[uuid.UUID],
+    shop_ids: list[uuid.UUID | None] | None = None,
 ) -> list[ShopperAutomationState]:
+    """`shop_ids`, when given, is positional with `shopper_ids` — each
+    shopper's own shop for this automation. Required (per-shopper) when the
+    automation itself is campaign-wide (automation.shop_id is None);
+    otherwise every shopper just falls back to automation.shop_id."""
+    if shop_ids is not None and len(shop_ids) != len(shopper_ids):
+        raise ValueError("shop_ids must be the same length as shopper_ids")
+    if automation.shop_id is None and shop_ids is None:
+        raise ValueError("A shop is required per shopper for a campaign-wide automation")
+
     # Queried directly rather than via `automation.shopper_states` — the
     # caller may be holding a freshly-created, not-yet-eager-loaded
     # automation (e.g. bulk_start), and accessing an unloaded relationship
@@ -204,13 +253,18 @@ async def add_shoppers(
     )
     existing_ids = set((await session.execute(existing_stmt)).scalars().all())
     created: list[ShopperAutomationState] = []
-    for sid in shopper_ids:
+    for i, sid in enumerate(shopper_ids):
         if sid in existing_ids:
             continue
         shopper = await session.get(Shopper, sid)
         if shopper is None:
             continue
-        state = ShopperAutomationState(automation_id=automation.id, shopper_id=sid, status=ShopperAutomationStatus.PENDING)
+        shopper_shop_id = shop_ids[i] if shop_ids is not None else automation.shop_id
+        if shopper_shop_id is None:
+            raise ValueError(f"No shop resolved for shopper {sid} in a campaign-wide automation")
+        state = ShopperAutomationState(
+            automation_id=automation.id, shopper_id=sid, shop_id=shopper_shop_id, status=ShopperAutomationStatus.PENDING
+        )
         session.add(state)
         created.append(state)
         existing_ids.add(sid)
@@ -328,8 +382,8 @@ async def stop_automation(session: AsyncSession, automation: EmailAutomation, us
 # send by constructing a transient, unsaved Invitation with a throwaway
 # tracking token.
 # --------------------------------------------------------------------------- #
-async def preview_step(automation: EmailAutomation, shopper: Shopper, step: int) -> dict:
-    tmpl = step_template(automation, step)
+async def preview_step(session: AsyncSession, automation: EmailAutomation, shopper: Shopper, step: int, shop: Shop) -> dict:
+    tmpl = await step_template(session, automation, step)
     if tmpl is None:
         raise ValueError(f"No template configured for step {step}.")
     transient = Invitation(
@@ -337,14 +391,14 @@ async def preview_step(automation: EmailAutomation, shopper: Shopper, step: int)
         tracking_token=uuid.uuid4(),
         reference=f"PREVIEW-{step}",
         campaign_id=automation.campaign_id,
-        shop_id=automation.shop_id,
+        shop_id=shop.id,
         shopper_id=shopper.id,
         email=shopper.email,
         subject=tmpl.subject,
         status="created",
     )
     transient.campaign = automation.campaign
-    transient.shop = automation.shop
+    transient.shop = shop
     transient.shopper = shopper
     return render_composed_email(transient, tmpl.subject, tmpl.html_body, preview=True)
 
@@ -360,7 +414,7 @@ async def next_reference(session: AsyncSession) -> str:
 
 
 async def _send_step(session: AsyncSession, automation: EmailAutomation, state: ShopperAutomationState, step: int) -> None:
-    tmpl = step_template(automation, step)
+    tmpl = await step_template(session, automation, step)
     if tmpl is None:
         state.status = ShopperAutomationStatus.COMPLETED_FAILED
         state.last_event = "no_template_configured"
@@ -369,7 +423,16 @@ async def _send_step(session: AsyncSession, automation: EmailAutomation, state: 
 
     shopper = state.shopper
     campaign = automation.campaign
-    shop = automation.shop
+    # A campaign-wide automation has no shop of its own — every shopper's
+    # own state carries theirs. A shop-scoped automation's states never set
+    # shop_id (add_shoppers falls back to automation.shop_id), so this
+    # naturally resolves to automation.shop for the original, unchanged case.
+    shop = state.shop or automation.shop
+    if shop is None:
+        state.status = ShopperAutomationStatus.COMPLETED_FAILED
+        state.last_event = "no_shop_resolved"
+        state.last_event_at = now()
+        return
 
     reference = await next_reference(session)
     inv = Invitation(
@@ -548,6 +611,7 @@ async def process_due_automations() -> int:
             )
             .options(
                 selectinload(ShopperAutomationState.shopper),
+                selectinload(ShopperAutomationState.shop),
                 selectinload(ShopperAutomationState.automation).selectinload(EmailAutomation.campaign),
                 selectinload(ShopperAutomationState.automation).selectinload(EmailAutomation.shop),
                 selectinload(ShopperAutomationState.automation).selectinload(EmailAutomation.step1_template),

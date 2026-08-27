@@ -441,16 +441,32 @@ class EmailAutomation(Base):
     campaign_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("campaigns.id", ondelete="CASCADE"), index=True
     )
-    shop_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("shops.id", ondelete="CASCADE"), index=True
+    # NULL = campaign-wide: spans every shop in the campaign at once (the
+    # client never picks a shop for this automation). Each shopper's own
+    # ShopperAutomationState.shop_id then carries which shop THEY belong to
+    # — an Invitation always needs a real shop, this just moves where that
+    # comes from. Non-NULL keeps the original single-shop behavior exactly.
+    shop_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("shops.id", ondelete="CASCADE"), nullable=True, index=True
     )
     name: Mapped[str] = mapped_column(String(255))
     # draft -> scheduled|active -> paused (resumable) -> stopped (terminal) -> completed (terminal)
     status: Mapped[str] = mapped_column(String(30), default="draft", index=True)
 
+    # Kept for backward compatibility with automations created before
+    # step_template_ids existed — step_template() in services/automation.py
+    # prefers step_template_ids and only falls back to these for old rows.
     step1_template_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("email_templates.id"), nullable=True)
     step2_template_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("email_templates.id"), nullable=True)
     step3_template_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("email_templates.id"), nullable=True)
+
+    # Ordered template id (as string) per step, index 0 = step 1. Length
+    # equals max_steps. Lets a client run more than 3 steps — most commonly
+    # to give each batch-emailing wave its own distinct email (Iterations=5
+    # -> 5 step slots) rather than being stuck at the fixed Initial
+    # Invitation / Reminder / Final Reminder trio. NULL entries fall back to
+    # a sensible default the same way the old step1/2/3 columns did.
+    step_template_ids: Mapped[list | None] = mapped_column(json_col(), nullable=True)
 
     wait_days: Mapped[int] = mapped_column(Integer, default=2)
     max_steps: Mapped[int] = mapped_column(Integer, default=3)
@@ -474,7 +490,7 @@ class EmailAutomation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     campaign: Mapped["Campaign"] = relationship()
-    shop: Mapped["Shop"] = relationship()
+    shop: Mapped["Shop | None"] = relationship()
     step1_template: Mapped["EmailTemplate | None"] = relationship(foreign_keys=[step1_template_id])
     step2_template: Mapped["EmailTemplate | None"] = relationship(foreign_keys=[step2_template_id])
     step3_template: Mapped["EmailTemplate | None"] = relationship(foreign_keys=[step3_template_id])
@@ -507,6 +523,14 @@ class ShopperAutomationState(Base):
     shopper_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("shoppers.id", ondelete="CASCADE"), index=True
     )
+    # Which shop THIS shopper's invitations under this automation belong to.
+    # NULL when the parent automation is itself shop-scoped (falls back to
+    # automation.shop_id); required when the automation is campaign-wide
+    # (automation.shop_id is NULL) — every shopper still needs a real shop
+    # for their actual Invitation rows.
+    shop_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("shops.id", ondelete="CASCADE"), nullable=True, index=True
+    )
 
     current_step: Mapped[int] = mapped_column(Integer, default=0)  # 0 = nothing sent yet
     # pending (queued, not yet started) -> active (mid-sequence) -> one of the
@@ -521,6 +545,7 @@ class ShopperAutomationState(Base):
 
     automation: Mapped["EmailAutomation"] = relationship(back_populates="shopper_states")
     shopper: Mapped["Shopper"] = relationship()
+    shop: Mapped["Shop | None"] = relationship()
 
     __table_args__ = (
         UniqueConstraint("automation_id", "shopper_id", name="uq_automation_shopper"),

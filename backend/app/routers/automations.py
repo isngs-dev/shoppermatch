@@ -30,11 +30,15 @@ router = APIRouter(prefix="/api/automations", tags=["Email Automation"])
 # --------------------------------------------------------------------------- #
 class AutomationCreate(BaseModel):
     campaign_id: str
-    shop_id: str
+    # None = campaign-wide: spans every shop in the campaign, no shop picker
+    # shown to the client. Each shopper's own shop is supplied separately
+    # via POST .../shoppers (ShoppersIn.shop_ids).
+    shop_id: str | None = None
     name: str = Field(min_length=1, max_length=255)
-    step1_template_id: str | None = None
-    step2_template_id: str | None = None
-    step3_template_id: str | None = None
+    # Ordered — index 0 is step 1. Defaults to a 3-step Initial
+    # Invitation/Reminder/Final Reminder sequence; a longer list gives each
+    # extra step (most commonly each batch-emailing wave) its own template.
+    step_template_ids: list[str | None] = Field(default_factory=lambda: [None, None, None], min_length=1, max_length=52)
     wait_days: int = Field(default=2, ge=1, le=14)
     scheduled_start_at: datetime | None = None
     # Batch emailing: leave unset to send every selected shopper's step 1
@@ -46,6 +50,11 @@ class AutomationCreate(BaseModel):
 
 class ShoppersIn(BaseModel):
     shopper_ids: list[str] = Field(min_length=1)
+    # Positional with shopper_ids — each shopper's own shop for this
+    # automation. Required (one per shopper) when the automation is
+    # campaign-wide; omit entirely for a shop-scoped automation, where every
+    # shopper just uses that automation's single shop.
+    shop_ids: list[str] | None = None
 
 
 class BulkStartRequest(BaseModel):
@@ -100,7 +109,7 @@ def _automation_out(a: EmailAutomation, with_states: bool = True) -> dict:
         "id": str(a.id),
         "campaign_id": str(a.campaign_id),
         "campaign_name": a.campaign.name if a.campaign else None,
-        "shop_id": str(a.shop_id),
+        "shop_id": str(a.shop_id) if a.shop_id else None,
         "shop_name": a.shop.shop_name if a.shop else None,
         "name": a.name,
         "status": a.status,
@@ -109,6 +118,15 @@ def _automation_out(a: EmailAutomation, with_states: bool = True) -> dict:
         "batch_size": a.batch_size,
         "total_iterations": a.total_iterations,
         "scheduled_start_at": iso(a.scheduled_start_at),
+        # Ordered, index 0 = step 1 — length == max_steps. Falls back to
+        # reconstructing from the legacy fixed columns for automations
+        # created before this array existed. The frontend resolves each id
+        # to a template name itself (it already fetches the template list).
+        "step_template_ids": a.step_template_ids
+        or [
+            str(t.id) if t else None
+            for t in (a.step1_template, a.step2_template, a.step3_template)
+        ],
         "step1_template_id": str(a.step1_template_id) if a.step1_template_id else None,
         "step2_template_id": str(a.step2_template_id) if a.step2_template_id else None,
         "step3_template_id": str(a.step3_template_id) if a.step3_template_id else None,
@@ -151,13 +169,13 @@ async def create_automation(
     campaign = enforce_campaign_access(campaign, user)
     if status_bucket(campaign.status) not in ("active", "upcoming"):
         raise HTTPException(status_code=400, detail="Outreach is closed for completed/cancelled campaigns")
-    shop = await session.get(Shop, _parse_uuid(body.shop_id, "shop"))
-    if shop is None or shop.campaign_id != campaign.id:
-        raise HTTPException(status_code=404, detail="Shop not found in this campaign")
+    shop = None
+    if body.shop_id:
+        shop = await session.get(Shop, _parse_uuid(body.shop_id, "shop"))
+        if shop is None or shop.campaign_id != campaign.id:
+            raise HTTPException(status_code=404, detail="Shop not found in this campaign")
 
-    step_ids = {}
-    for step, raw in ((1, body.step1_template_id), (2, body.step2_template_id), (3, body.step3_template_id)):
-        step_ids[step] = _parse_uuid(raw, f"step{step}_template") if raw else None
+    step_ids = [_parse_uuid(raw, "step_template") if raw else None for raw in body.step_template_ids]
 
     automation = await engine.create_automation(
         session, user, campaign, shop, body.name.strip(), step_ids, body.wait_days, body.scheduled_start_at,
@@ -214,7 +232,7 @@ async def bulk_start(
                 automations_out.append({"shop_name": shop.shop_name, "skipped": True, "reason": "No eligible shoppers found"})
                 continue
             automation = await engine.create_automation(
-                session, user, campaign, shop, f"{shop.shop_name} — Bulk Automation", {}, 2, None
+                session, user, campaign, shop, f"{shop.shop_name} — Bulk Automation", [None, None, None], 2, None
             )
             shopper_ids = [uuid.UUID(r["shopper_id"]) for r in top]
             await engine.add_shoppers(session, automation, user, shopper_ids)
@@ -285,7 +303,15 @@ async def add_shoppers(
     if a.status not in ("draft", "paused"):
         raise HTTPException(status_code=409, detail="Shoppers can only be added while the automation is draft or paused.")
     ids = [_parse_uuid(s, "shopper") for s in body.shopper_ids]
-    await engine.add_shoppers(session, a, user, ids)
+    shop_ids: list[uuid.UUID | None] | None = None
+    if body.shop_ids is not None:
+        if len(body.shop_ids) != len(ids):
+            raise HTTPException(status_code=400, detail="shop_ids must be the same length as shopper_ids")
+        shop_ids = [_parse_uuid(s, "shop") for s in body.shop_ids]
+    try:
+        await engine.add_shoppers(session, a, user, ids, shop_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     await session.commit()
     a = await _load(session, automation_id)
     return _automation_out(a)
@@ -314,7 +340,7 @@ async def remove_shopper(
 async def preview(
     automation_id: uuid.UUID,
     shopper_id: uuid.UUID,
-    step: int = Query(default=1, ge=1, le=3),
+    step: int = Query(default=1, ge=1, le=52),
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_operator),
 ):
@@ -323,8 +349,12 @@ async def preview(
     shopper = await session.get(Shopper, shopper_id)
     if shopper is None:
         raise HTTPException(status_code=404, detail="Shopper not found")
+    state = next((s for s in a.shopper_states if s.shopper_id == shopper_id), None)
+    shop = (state.shop if state and state.shop else None) or a.shop
+    if shop is None:
+        raise HTTPException(status_code=400, detail="No shop context available for this shopper in this automation.")
     try:
-        return await engine.preview_step(a, shopper, step)
+        return await engine.preview_step(session, a, shopper, step, shop)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

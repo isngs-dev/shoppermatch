@@ -128,7 +128,7 @@ export function EmailAutomationPanel({ compact }: { compact?: boolean }) {
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="truncate font-semibold text-slate-900 dark:text-white">{a.name}</div>
-                  <div className="truncate text-xs text-slate-400">{a.shop_name}</div>
+                  <div className="truncate text-xs text-slate-400">{a.shop_name || "All shops in campaign"}</div>
                 </div>
                 <Badge className={STATUS_BADGE[a.status] || STATUS_BADGE.draft}>{cap(a.status)}</Badge>
               </div>
@@ -142,10 +142,10 @@ export function EmailAutomationPanel({ compact }: { compact?: boolean }) {
         </div>
       )}
 
-      {showBuilder && campaignId && (
+      {showBuilder && (
         <AutomationBuilder
-          campaignId={campaignId}
-          campaignType={campaignType}
+          initialCampaignId={campaignId}
+          initialCampaignType={campaignType}
           onClose={() => setShowBuilder(false)}
           onCreated={(id) => {
             setShowBuilder(false);
@@ -168,19 +168,38 @@ function MiniStat({ label, value }: { label: string; value: number }) {
 
 // ------------------------------ Builder ------------------------------ //
 function AutomationBuilder({
-  campaignId,
-  campaignType,
+  initialCampaignId,
+  initialCampaignType,
   onClose,
   onCreated,
 }: {
-  campaignId: string;
-  campaignType: "active" | "upcoming";
+  initialCampaignId: string;
+  initialCampaignType: "active" | "upcoming";
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
   const toast = useToast();
-  const [shops, setShops] = useState<any[]>([]);
-  const [shopId, setShopId] = useState("");
+  // Always campaign-wide — there is no "pick one shop" mode. Active/Upcoming
+  // + Campaign are chosen right here (seeded from whatever was selected on
+  // the page behind this modal), so the whole flow is self-contained.
+  const [campaignType, setCampaignType] = useState<"active" | "upcoming">(initialCampaignType);
+  const campaignsApi = useApi(() => api.campaigns({ status: campaignType }), [campaignType]);
+  const [campaignId, setCampaignId] = useState(initialCampaignId);
+
+  useEffect(() => {
+    if (!campaignsApi.data) return;
+    const items = campaignsApi.data.items;
+    if (!items.length) {
+      setCampaignId("");
+      return;
+    }
+    if (items.some((c: any) => c.id === campaignId)) return;
+    setCampaignId(items[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignsApi.data]);
+
+  const campaignName = campaignsApi.data?.items.find((c: any) => c.id === campaignId)?.name || "";
+
   const [name, setName] = useState("");
   const [waitDays, setWaitDays] = useState(2);
   // Batch emailing: off by default (everyone selected gets step 1 on
@@ -190,48 +209,65 @@ function AutomationBuilder({
   const [batchEnabled, setBatchEnabled] = useState(false);
   const [batchSize, setBatchSize] = useState(10);
   const [iterations, setIterations] = useState(3);
-  const [scheduleUpcoming, setScheduleUpcoming] = useState(campaignType === "upcoming");
+  const [scheduleUpcoming, setScheduleUpcoming] = useState(initialCampaignType === "upcoming");
   const [scheduledAt, setScheduledAt] = useState("");
   const templatesApi = useApi(() => api.emailTemplates());
-  const [stepTemplates, setStepTemplates] = useState<Record<1 | 2 | 3, string>>({ 1: "", 2: "", 3: "" });
+  // Batch emailing ties step count to wave count: each wave gets its own
+  // distinct email instead of everyone sharing the same fixed 3-step
+  // Initial Invitation/Reminder/Final Reminder trio. Off (or off-batch)
+  // always stays at the original 3 steps.
+  const stepCount = batchEnabled ? Math.max(1, iterations) : 3;
+  const [stepTemplates, setStepTemplates] = useState<Record<number, string>>({ 1: "", 2: "", 3: "" });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [creating, setCreating] = useState(false);
 
-  const recs = useApi(
-    () => (shopId ? api.aiShopRecommendations(campaignId, shopId, { limit: 20 }) : Promise.resolve(null)),
-    [shopId]
+  useEffect(() => {
+    setStepTemplates((prev) => {
+      const next = { ...prev };
+      for (let i = 1; i <= stepCount; i++) if (!(i in next)) next[i] = "";
+      return next;
+    });
+  }, [stepCount]);
+
+  // The same AI Assignment Optimizer "Auto Assign Shoppers" already uses —
+  // one pass across every shop in the campaign, never proposing the same
+  // shopper for two shops, respecting each shop's own required_shoppers
+  // count. Shops never surface in this UI; they're only used internally to
+  // route each shopper's actual invitation correctly.
+  const campaignRecs = useApi(
+    () => (campaignId ? api.aiOptimizeAssignments(campaignId) : Promise.resolve(null)),
+    [campaignId]
   );
 
   useEffect(() => {
-    api.campaignShops(campaignId).then((r) => {
-      setShops(r.items);
-      setShopId(r.items[0]?.id || "");
-      setName(r.items[0] ? `${r.items[0].shop_name} — Outreach Sequence` : "");
-    });
-  }, [campaignId]);
+    setScheduleUpcoming(campaignType === "upcoming");
+  }, [campaignType]);
 
   useEffect(() => {
-    const shop = shops.find((s) => s.id === shopId);
-    if (shop) setName(`${shop.shop_name} — Outreach Sequence`);
+    setName(campaignName ? `${campaignName} — Campaign Sequence` : "Campaign Sequence");
     setSelected(new Set());
-  }, [shopId]);
+  }, [campaignId, campaignName]);
 
-  // Default to everyone the AI recommended selected — most of the time
-  // that's exactly who should get the automation, and it's faster to
-  // deselect the few exceptions than to hand-pick from a list of 20.
+  // Default to everyone the AI proposed selected — most of the time that's
+  // exactly who should get the automation ("sabko mail jaana chahiye"), and
+  // it's faster to deselect a few exceptions than to hand-pick from a list.
   useEffect(() => {
-    if (recs.data?.recommendations) {
-      setSelected(new Set(recs.data.recommendations.map((r: any) => r.shopper_id)));
+    if (campaignRecs.data?.proposals) {
+      setSelected(new Set(campaignRecs.data.proposals.map((p: any) => p.shopper_id)));
     }
-  }, [recs.data]);
+  }, [campaignRecs.data]);
 
-  const templatesByName = useMemo(() => {
-    const map: Record<string, any> = {};
-    for (const t of templatesApi.data?.items || []) map[t.name] = t;
-    return map;
-  }, [templatesApi.data]);
-
-  const candidates = recs.data?.recommendations || [];
+  const candidates = useMemo(
+    () =>
+      (campaignRecs.data?.proposals || []).map((p: any) => ({
+        shopper_id: p.shopper_id,
+        name: p.shopper_name,
+        match_score: p.match_score,
+        shop_id: p.shop_id,
+        shop_name: p.shop_name,
+      })),
+    [campaignRecs.data]
+  );
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -243,29 +279,40 @@ function AutomationBuilder({
   }
 
   async function create() {
-    if (!shopId || !name.trim() || selected.size === 0) {
-      toast("Pick a shop, name the automation, and select at least one shopper.", "error");
+    if (!campaignId) {
+      toast("Pick a campaign first.", "error");
+      return;
+    }
+    if (!name.trim() || selected.size === 0) {
+      toast("Name the automation and select at least one shopper.", "error");
       return;
     }
     setCreating(true);
     try {
+      // One automation for the whole campaign — shop is never a concept the
+      // client sees or picks. Each selected shopper still needs a real shop
+      // behind the scenes (an Invitation always belongs to one), so it's
+      // sent alongside shopper_ids, positionally, from the AI proposal.
+      const chosen = candidates.filter((c: any) => selected.has(c.shopper_id));
       const automation = await api.createAutomation({
         campaign_id: campaignId,
-        shop_id: shopId,
+        shop_id: null,
         name: name.trim(),
-        step1_template_id: stepTemplates[1] || null,
-        step2_template_id: stepTemplates[2] || null,
-        step3_template_id: stepTemplates[3] || null,
+        step_template_ids: Array.from({ length: stepCount }, (_, i) => stepTemplates[i + 1] || null),
         wait_days: waitDays,
         scheduled_start_at: scheduleUpcoming && scheduledAt ? new Date(scheduledAt).toISOString() : null,
         batch_size: batchEnabled ? batchSize : null,
         total_iterations: batchEnabled ? iterations : 1,
       });
-      await api.addAutomationShoppers(automation.id, Array.from(selected));
-      toast(`Automation "${name.trim()}" created with ${selected.size} shopper(s). Review and Start it.`, "success");
+      await api.addAutomationShoppers(
+        automation.id,
+        chosen.map((c: any) => c.shopper_id),
+        chosen.map((c: any) => c.shop_id)
+      );
+      toast(`Automation "${name.trim()}" created with ${chosen.length} shopper(s) across this campaign. Review and Start it.`, "success");
       onCreated(automation.id);
     } catch (e: any) {
-      toast(e?.message || "Failed to create automation", "error");
+      toast(e?.message || "Failed to create campaign-wide automation", "error");
     } finally {
       setCreating(false);
     }
@@ -276,15 +323,38 @@ function AutomationBuilder({
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="relative max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900">
         <h3 className="text-base font-bold text-slate-900 dark:text-white">New Email Automation</h3>
+        <p className="mt-1 text-[11px] text-slate-400">
+          Covers every AI-recommended shopper across the whole campaign — shops are never picked or shown here.
+        </p>
+
+        <div className="mt-3 inline-flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800/70">
+          {(["active", "upcoming"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setCampaignType(t)}
+              className={classNames(
+                "rounded-lg px-3.5 py-1.5 text-xs font-semibold transition",
+                campaignType === t ? "bg-brand-600 text-white shadow" : "text-slate-500 hover:text-slate-800 dark:text-slate-400"
+              )}
+            >
+              {t === "active" ? "Active Campaign" : "Upcoming Campaign"}
+            </button>
+          ))}
+        </div>
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="label">Shop</label>
-            <select className="input" value={shopId} onChange={(e) => setShopId(e.target.value)}>
-              {shops.map((s) => (
-                <option key={s.id} value={s.id}>{s.shop_name} — {s.city}</option>
-              ))}
-            </select>
+            <label className="label">Campaign</label>
+            {!campaignsApi.data?.items.length ? (
+              <div className="input flex h-9 items-center text-sm text-slate-400">No {campaignType} campaigns</div>
+            ) : (
+              <select className="input" value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
+                {campaignsApi.data.items.map((c: any) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            )}
           </div>
           <div>
             <label className="label">Automation name</label>
@@ -317,7 +387,8 @@ function AutomationBuilder({
           <p className="mt-1 text-[11px] text-slate-400">
             Off sends step 1 to every selected shopper immediately on Start. On releases them in waves instead —
             {" "}{batchSize} shopper(s) every {waitDays} day(s), for {iterations} iteration(s) (
-            {batchSize * iterations} shopper(s) total reached; anyone beyond that stays queued, unsent).
+            {batchSize * iterations} shopper(s) total reached; anyone beyond that stays queued, unsent). Each wave
+            also gets its own email — Email Steps below will show {iterations} step(s) to match.
           </p>
           {batchEnabled && (
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -348,16 +419,20 @@ function AutomationBuilder({
         </div>
 
         <div className="mt-4">
-          <div className="label">Email steps</div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {([1, 2, 3] as const).map((step) => {
-              const defaultName = step === 1 ? "Initial Invitation" : step === 2 ? "Reminder" : "Final Reminder";
+          <div className="label">
+            Email steps{batchEnabled ? " (one per wave — change Iterations above to add or remove steps)" : ""}
+          </div>
+          <div className={classNames("grid gap-2", stepCount > 3 ? "sm:grid-cols-4" : "sm:grid-cols-3")}>
+            {Array.from({ length: stepCount }, (_, i) => i + 1).map((step) => {
+              const defaultName = step === 1 ? "Initial Invitation" : step === stepCount ? "Final Reminder" : "Reminder";
               return (
                 <div key={step} className="rounded-lg border border-slate-200 p-2.5 dark:border-slate-700">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Step {step}</div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    Step {step}{batchEnabled ? ` (wave ${step})` : ""}
+                  </div>
                   <select
                     className="input mt-1 h-9 text-xs"
-                    value={stepTemplates[step]}
+                    value={stepTemplates[step] || ""}
                     onChange={(e) => setStepTemplates((prev) => ({ ...prev, [step]: e.target.value }))}
                   >
                     <option value="">{defaultName} (default)</option>
@@ -370,14 +445,14 @@ function AutomationBuilder({
             })}
           </div>
           <p className="mt-1 text-[11px] text-slate-400">
-            Max 3 emails per shopper. Any shopper who clicks, visits the assignment page, accepts, or declines
-            stops immediately — never reaches step 2 or 3.
+            Max {stepCount} email{stepCount > 1 ? "s" : ""} per shopper. Any shopper who clicks, visits the assignment
+            page, accepts, or declines stops immediately — never reaches a later step.
           </p>
         </div>
 
         <div className="mt-4">
           <div className="flex items-center justify-between">
-            <div className="label !mb-0">AI-recommended shoppers for this shop</div>
+            <div className="label !mb-0">AI-recommended shoppers across this campaign</div>
             {!!candidates.length && (
               <div className="flex gap-2 text-[11px]">
                 <button
@@ -397,10 +472,10 @@ function AutomationBuilder({
               </div>
             )}
           </div>
-          {shopId && recs.loading && !recs.data ? (
+          {campaignRecs.loading && !campaignRecs.data ? (
             <div className="mt-1.5 flex items-center gap-2 text-sm text-slate-400"><Spinner /> AI is matching shoppers…</div>
           ) : !candidates.length ? (
-            <p className="mt-1.5 text-sm text-slate-400">No candidates found. Try a different shop.</p>
+            <p className="mt-1.5 text-sm text-slate-400">No candidates found for any shop in this campaign.</p>
           ) : (
             <div className="mt-1.5 max-h-64 space-y-1.5 overflow-y-auto rounded-lg border border-slate-100 p-2 dark:border-slate-800">
               {candidates.map((r: any) => (
@@ -412,7 +487,9 @@ function AutomationBuilder({
                   <Avatar name={r.name} className="h-7 w-7" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium text-slate-800 dark:text-slate-100">{r.name}</div>
-                    <div className="text-[11px] text-slate-400">{r.city} · {r.match_score}% match</div>
+                    <div className="text-[11px] text-slate-400">
+                      {r.city ? `${r.city} · ` : ""}{r.match_score}% match
+                    </div>
                   </div>
                 </label>
               ))}
@@ -502,7 +579,7 @@ export function AutomationDetailPage() {
             <Badge className={STATUS_BADGE[data.status] || STATUS_BADGE.draft}>{cap(data.status)}</Badge>
           </div>
           <p className="mt-1 text-sm text-slate-400">
-            {data.campaign_name} · {data.shop_name} · every {data.wait_days} day(s) · up to {data.max_steps} emails/shopper
+            {data.campaign_name} · {data.shop_name || "All shops"} · every {data.wait_days} day(s) · up to {data.max_steps} emails/shopper
             {data.batch_size ? ` · batch of ${data.batch_size}, ${data.total_iterations} iteration(s)` : ""}
           </p>
         </div>
@@ -579,7 +656,7 @@ export function AutomationDetailPage() {
                     }}
                   >
                     <option value="">View…</option>
-                    {[1, 2, 3].map((st) => (
+                    {Array.from({ length: data.max_steps }, (_, i) => i + 1).map((st) => (
                       <option key={st} value={st}>Step {st}</option>
                     ))}
                   </select>

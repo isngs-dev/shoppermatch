@@ -254,18 +254,24 @@ export const api = {
   automation: (id: string) => request(`/api/automations/${id}`),
   createAutomation: (body: {
     campaign_id: string;
-    shop_id: string;
+    // Omit/null for a campaign-wide automation (spans every shop in the
+    // campaign) — each shopper's own shop is then supplied separately via
+    // addAutomationShoppers's shopIds.
+    shop_id?: string | null;
     name: string;
-    step1_template_id?: string | null;
-    step2_template_id?: string | null;
-    step3_template_id?: string | null;
+    // Ordered — index 0 is step 1. Longer than 3 gives each extra step
+    // (most commonly each batch-emailing wave) its own template.
+    step_template_ids?: (string | null)[];
     wait_days?: number;
     scheduled_start_at?: string | null;
     batch_size?: number | null;
     total_iterations?: number;
   }) => request("/api/automations", { method: "POST", body }),
-  addAutomationShoppers: (id: string, shopperIds: string[]) =>
-    request(`/api/automations/${id}/shoppers`, { method: "POST", body: { shopper_ids: shopperIds } }),
+  addAutomationShoppers: (id: string, shopperIds: string[], shopIds?: string[]) =>
+    request(`/api/automations/${id}/shoppers`, {
+      method: "POST",
+      body: { shopper_ids: shopperIds, ...(shopIds ? { shop_ids: shopIds } : {}) },
+    }),
   removeAutomationShopper: (id: string, shopperId: string) =>
     request(`/api/automations/${id}/shoppers/${shopperId}`, { method: "DELETE" }),
   automationPreview: (id: string, shopperId: string, step: number) =>
