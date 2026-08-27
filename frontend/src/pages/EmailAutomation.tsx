@@ -182,33 +182,52 @@ function AutomationBuilder({
   // Always campaign-wide — there is no "pick one shop" mode. Active/Upcoming
   // + Campaign are chosen right here (seeded from whatever was selected on
   // the page behind this modal), so the whole flow is self-contained.
-  const [campaignType, setCampaignType] = useState<"active" | "upcoming">(initialCampaignType);
-  const campaignsApi = useApi(() => api.campaigns({ status: campaignType }), [campaignType]);
+  // "Entire Campaign" drops the active/upcoming filter entirely — it lists
+  // every campaign (excluding completed/cancelled) in one flat dropdown so
+  // the client doesn't need to know or care which bucket theirs is in.
+  const [campaignType, setCampaignType] = useState<"active" | "upcoming" | "all">(initialCampaignType);
+  const campaignsApi = useApi(
+    () => api.campaigns(campaignType === "all" ? {} : { status: campaignType }),
+    [campaignType]
+  );
+  const eligibleCampaigns = useMemo(
+    () =>
+      campaignType === "all"
+        ? (campaignsApi.data?.items || []).filter((c: any) => c.bucket === "active" || c.bucket === "upcoming")
+        : campaignsApi.data?.items || [],
+    [campaignsApi.data, campaignType]
+  );
   const [campaignId, setCampaignId] = useState(initialCampaignId);
 
   useEffect(() => {
     if (!campaignsApi.data) return;
-    const items = campaignsApi.data.items;
-    if (!items.length) {
+    if (!eligibleCampaigns.length) {
       setCampaignId("");
       return;
     }
-    if (items.some((c: any) => c.id === campaignId)) return;
-    setCampaignId(items[0].id);
+    if (eligibleCampaigns.some((c: any) => c.id === campaignId)) return;
+    setCampaignId(eligibleCampaigns[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaignsApi.data]);
+  }, [campaignsApi.data, campaignType]);
 
-  const campaignName = campaignsApi.data?.items.find((c: any) => c.id === campaignId)?.name || "";
+  const selectedCampaign = eligibleCampaigns.find((c: any) => c.id === campaignId);
+  const campaignName = selectedCampaign?.name || "";
 
   const [name, setName] = useState("");
-  const [waitDays, setWaitDays] = useState(2);
+  // Kept as raw text while typing (not a number) so backspacing to clear
+  // the field doesn't immediately snap back to a fallback value — only
+  // clamped to a real number where it's actually used, below.
+  const [waitDaysInput, setWaitDaysInput] = useState("2");
+  const waitDays = Math.max(1, parseInt(waitDaysInput, 10) || 2);
   // Batch emailing: off by default (everyone selected gets step 1 on
   // Start, same as before this existed). Turning it on releases shoppers
   // in waves of `batchSize`, `waitDays` apart, for up to `iterations`
   // waves — anyone beyond batchSize * iterations stays queued, never sent.
   const [batchEnabled, setBatchEnabled] = useState(false);
-  const [batchSize, setBatchSize] = useState(10);
-  const [iterations, setIterations] = useState(3);
+  const [batchSizeInput, setBatchSizeInput] = useState("10");
+  const [iterationsInput, setIterationsInput] = useState("3");
+  const batchSize = Math.max(1, parseInt(batchSizeInput, 10) || 1);
+  const iterations = Math.max(1, parseInt(iterationsInput, 10) || 1);
   const [scheduleUpcoming, setScheduleUpcoming] = useState(initialCampaignType === "upcoming");
   const [scheduledAt, setScheduledAt] = useState("");
   const templatesApi = useApi(() => api.emailTemplates());
@@ -240,8 +259,9 @@ function AutomationBuilder({
   );
 
   useEffect(() => {
-    setScheduleUpcoming(campaignType === "upcoming");
-  }, [campaignType]);
+    setScheduleUpcoming(campaignType === "all" ? selectedCampaign?.bucket === "upcoming" : campaignType === "upcoming");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignType, campaignId]);
 
   useEffect(() => {
     setName(campaignName ? `${campaignName} — Campaign Sequence` : "Campaign Sequence");
@@ -328,7 +348,7 @@ function AutomationBuilder({
         </p>
 
         <div className="mt-3 inline-flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800/70">
-          {(["active", "upcoming"] as const).map((t) => (
+          {(["active", "upcoming", "all"] as const).map((t) => (
             <button
               key={t}
               type="button"
@@ -338,20 +358,29 @@ function AutomationBuilder({
                 campaignType === t ? "bg-brand-600 text-white shadow" : "text-slate-500 hover:text-slate-800 dark:text-slate-400"
               )}
             >
-              {t === "active" ? "Active Campaign" : "Upcoming Campaign"}
+              {t === "active" ? "Active Campaign" : t === "upcoming" ? "Upcoming Campaign" : "Entire Campaign"}
             </button>
           ))}
         </div>
+        {campaignType === "all" && (
+          <p className="mt-1.5 text-[11px] text-slate-400">
+            Pick any campaign, active or upcoming — no need to filter by status first.
+          </p>
+        )}
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
             <label className="label">Campaign</label>
-            {!campaignsApi.data?.items.length ? (
-              <div className="input flex h-9 items-center text-sm text-slate-400">No {campaignType} campaigns</div>
+            {!eligibleCampaigns.length ? (
+              <div className="input flex h-9 items-center text-sm text-slate-400">
+                No {campaignType === "all" ? "active or upcoming" : campaignType} campaigns
+              </div>
             ) : (
               <select className="input" value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
-                {campaignsApi.data.items.map((c: any) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
+                {eligibleCampaigns.map((c: any) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}{campaignType === "all" ? ` (${cap(c.bucket)})` : ""}
+                  </option>
                 ))}
               </select>
             )}
@@ -362,7 +391,7 @@ function AutomationBuilder({
           </div>
           <div>
             <label className="label">Wait between steps (days)</label>
-            <input type="number" min={1} max={14} className="input" value={waitDays} onChange={(e) => setWaitDays(Number(e.target.value) || 2)} />
+            <input type="number" min={1} max={14} className="input" value={waitDaysInput} onChange={(e) => setWaitDaysInput(e.target.value)} />
           </div>
           <div>
             <label className="label flex items-center gap-2">
@@ -399,8 +428,8 @@ function AutomationBuilder({
                   min={1}
                   max={1000}
                   className="input"
-                  value={batchSize}
-                  onChange={(e) => setBatchSize(Math.max(1, Number(e.target.value) || 1))}
+                  value={batchSizeInput}
+                  onChange={(e) => setBatchSizeInput(e.target.value)}
                 />
               </div>
               <div>
@@ -410,8 +439,8 @@ function AutomationBuilder({
                   min={1}
                   max={52}
                   className="input"
-                  value={iterations}
-                  onChange={(e) => setIterations(Math.max(1, Number(e.target.value) || 1))}
+                  value={iterationsInput}
+                  onChange={(e) => setIterationsInput(e.target.value)}
                 />
               </div>
             </div>
