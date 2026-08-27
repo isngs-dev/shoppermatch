@@ -166,7 +166,11 @@ export const api = {
     request(`/api/invitations/${id}/email` + qs({ preview })),
   simulate: (id: string, action: string) =>
     request(`/api/invitations/${id}/simulate`, { method: "POST", body: { action } }),
-  sendInvitation: (id: string) => request(`/api/invitations/${id}/send`, { method: "POST" }),
+  sendInvitation: (id: string, customSubject?: string, customHtml?: string) =>
+    request(`/api/invitations/${id}/send`, {
+      method: "POST",
+      body: customSubject && customHtml ? { custom_subject: customSubject, custom_html: customHtml } : {},
+    }),
   sendTestInvitation: (id: string, testEmail: string) =>
     request(`/api/invitations/${id}/send-test`, { method: "POST", body: { test_email: testEmail } }),
   followUpInvitation: (id: string) => request(`/api/invitations/${id}/follow-up`, { method: "POST" }),

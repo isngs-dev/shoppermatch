@@ -11,6 +11,7 @@ import re
 import uuid
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -22,7 +23,7 @@ from ..models import Campaign, EmailComposition, EventType, Invitation, Shop, Sh
 from ..schemas import BulkInvitationCreateRequest, InvitationCreateRequest, SendTestRequest, SimulateRequest
 from ..serializers import invitation_detail, invitation_row
 from ..services.audit import record_audit
-from ..services.email import render_invitation_email, send_email
+from ..services.email import load_composition, render_invitation_email, send_email
 from ..services.outbox import enqueue_email
 from ..services.selection import enforce_over_selection
 from ..services.tenancy import enforce_campaign_access
@@ -368,9 +369,21 @@ async def simulate(
 # Explicit send step. Generate Invitation only creates the tracked record;
 # this is the action that actually calls the email provider.
 # --------------------------------------------------------------------------- #
+class SendInvitationRequest(BaseModel):
+    # Optional — these invitations (e.g. approved straight from AI
+    # Recommendations) are created with a generic default subject/body and
+    # no saved composition, so without this a client's edits in the Send
+    # Invitation compose box would have no effect on them at all. When both
+    # are given, they're saved as this invitation's composition right before
+    # sending, so what gets delivered actually matches what was edited.
+    custom_subject: str | None = None
+    custom_html: str | None = None
+
+
 @router.post("/{invitation_id}/send")
 async def send_invitation(
     invitation_id: uuid.UUID,
+    body: SendInvitationRequest = Body(default_factory=SendInvitationRequest),
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_operator),
 ):
@@ -390,6 +403,21 @@ async def send_invitation(
 
     if inv.email_job is not None and inv.email_job.status in ("queued", "sending", "retrying"):
         raise HTTPException(status_code=409, detail="This invitation is already queued for delivery.")
+
+    if body.custom_subject and body.custom_html:
+        existing = await load_composition(session, inv.id)
+        if existing is not None:
+            existing.subject_template = body.custom_subject
+            existing.html_template = body.custom_html
+        else:
+            session.add(
+                EmailComposition(
+                    invitation_id=inv.id,
+                    subject_template=body.custom_subject,
+                    html_template=body.custom_html,
+                )
+            )
+        inv.subject = body.custom_subject
 
     job = await enqueue_email(session, inv)
     await add_event(session, inv, EventType.EMAIL_QUEUED, {"provider": job.provider, "actor": user.email})

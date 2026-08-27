@@ -192,27 +192,55 @@ const TABS = [
 // Reuses the existing invitation record via sendInvitation — never re-creates
 // it, so this can't trip the over-selection guard or double-invite anyone.
 // --------------------------------------------------------------------------- //
-function PendingInvitationsPanel({ campaignId, shopId }: { campaignId: string; shopId: string }) {
+function PendingInvitationsPanel({
+  campaignId,
+  shopId,
+  composedSubject,
+  composedBody,
+}: {
+  campaignId: string;
+  shopId: string;
+  composedSubject: string;
+  composedBody: string;
+}) {
   const toast = useToast();
   const { data, loading, reload } = useApi(
     () => api.invitations({ campaign_id: campaignId, shop_id: shopId, status: "created" }),
     [campaignId, shopId]
   );
   const [sendingId, setSendingId] = useState<string | null>(null);
-  const [sendingAll, setSendingAll] = useState(false);
+  const [sendingSelected, setSendingSelected] = useState(false);
   // The backend flips an invitation's status to "sent" asynchronously (the
   // outbox worker does it on actual delivery, not on enqueue), so a `reload()`
   // right after a successful send can still show it as pending for a few
   // seconds. Track "just sent" ids locally so the row disappears immediately.
   const [justSent, setJustSent] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const pending = ((data?.items || []) as any[]).filter((inv) => !justSent.has(inv.id));
+
+  // Default to everyone selected — most of the time that's exactly who
+  // should be sent, and it's faster to deselect a couple exceptions than to
+  // hand-pick from a list of 20+.
+  useEffect(() => {
+    setSelected(new Set(pending.map((inv) => inv.id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
   if (!loading && pending.length === 0) return null;
+
+  // These invitations were created with a generic default subject/body at
+  // AI Recommendations approval time — without passing the current compose
+  // box content through, editing "Email Body" above would have no effect on
+  // anything sent from here (it only affected the separate bulk-compose
+  // flow). Only send it as a customization when there's actually something
+  // to send — an empty compose box shouldn't blank out the default.
+  const custom = composedSubject.trim() && composedBody.trim() ? { subject: composedSubject, html: composedBody } : null;
 
   async function sendOne(id: string) {
     setSendingId(id);
     try {
-      await api.sendInvitation(id);
+      await api.sendInvitation(id, custom?.subject, custom?.html);
       toast("Queued for delivery.", "success");
       setJustSent((prev) => new Set(prev).add(id));
       reload();
@@ -223,23 +251,36 @@ function PendingInvitationsPanel({ campaignId, shopId }: { campaignId: string; s
     }
   }
 
-  async function sendAll() {
-    setSendingAll(true);
+  async function sendSelected() {
+    const targets = pending.filter((inv) => selected.has(inv.id));
+    if (targets.length === 0) return;
+    setSendingSelected(true);
     try {
-      const results = await Promise.allSettled(pending.map((inv) => api.sendInvitation(inv.id)));
+      const results = await Promise.allSettled(
+        targets.map((inv) => api.sendInvitation(inv.id, custom?.subject, custom?.html))
+      );
       const failed = results.filter((r) => r.status === "rejected").length;
-      const succeededIds = pending
+      const succeededIds = targets
         .map((inv, i) => (results[i].status === "fulfilled" ? inv.id : null))
         .filter((id): id is string => id !== null);
       setJustSent((prev) => new Set([...prev, ...succeededIds]));
       toast(
-        failed ? `Sent ${pending.length - failed} of ${pending.length}; ${failed} failed.` : `Sent ${pending.length} invitation(s).`,
+        failed ? `Sent ${targets.length - failed} of ${targets.length}; ${failed} failed.` : `Sent ${targets.length} invitation(s).`,
         failed ? "info" : "success"
       );
       reload();
     } finally {
-      setSendingAll(false);
+      setSendingSelected(false);
     }
+  }
+
+  function toggle(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   return (
@@ -250,15 +291,38 @@ function PendingInvitationsPanel({ campaignId, shopId }: { campaignId: string; s
             {loading ? "Checking for approved candidates…" : `${pending.length} shopper(s) approved for this shop, not yet emailed`}
           </div>
           <p className="text-xs text-amber-700 dark:text-amber-400">
-            These were selected in AI Recommendations. Send now, or edit the message below first.
+            These were selected in AI Recommendations. Edit the message below first if you want to customize it,
+            then send.
           </p>
         </div>
         {pending.length > 1 && (
-          <button className="btn-primary !py-1.5 text-xs" onClick={sendAll} disabled={sendingAll}>
-            {sendingAll ? <Spinner className="h-3.5 w-3.5" /> : null} Send All ({pending.length})
+          <button
+            className="btn-primary !py-1.5 text-xs"
+            onClick={sendSelected}
+            disabled={sendingSelected || selected.size === 0}
+          >
+            {sendingSelected ? <Spinner className="h-3.5 w-3.5" /> : null} Send Selected ({selected.size})
           </button>
         )}
       </div>
+      {pending.length > 1 && (
+        <div className="mt-2 flex gap-2 text-[11px]">
+          <button
+            type="button"
+            className="font-semibold text-amber-700 hover:underline dark:text-amber-400"
+            onClick={() => setSelected(new Set(pending.map((inv) => inv.id)))}
+          >
+            Select all
+          </button>
+          <button
+            type="button"
+            className="font-semibold text-amber-600/70 hover:underline dark:text-amber-500/70"
+            onClick={() => setSelected(new Set())}
+          >
+            Deselect all
+          </button>
+        </div>
+      )}
       {pending.length > 0 && (
         <ul className="mt-3 space-y-1.5">
           {pending.map((inv) => (
@@ -266,14 +330,17 @@ function PendingInvitationsPanel({ campaignId, shopId }: { campaignId: string; s
               key={inv.id}
               className="flex items-center justify-between gap-2 rounded-lg bg-white/70 px-3 py-2 text-sm dark:bg-slate-900/40"
             >
-              <span className="font-medium text-slate-800 dark:text-slate-100">
-                {inv.shopper_name || inv.shopper_email}
-                <span className="ml-2 text-xs font-normal text-slate-400">{inv.reference}</span>
-              </span>
+              <label className="flex min-w-0 cursor-pointer items-center gap-2.5">
+                <input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggle(inv.id)} />
+                <span className="min-w-0 truncate font-medium text-slate-800 dark:text-slate-100">
+                  {inv.shopper_name || inv.shopper_email}
+                  <span className="ml-2 text-xs font-normal text-slate-400">{inv.reference}</span>
+                </span>
+              </label>
               <button
-                className="btn-secondary !py-1 text-xs"
+                className="btn-secondary shrink-0 !py-1 text-xs"
                 onClick={() => sendOne(inv.id)}
-                disabled={sendingId === inv.id || sendingAll}
+                disabled={sendingId === inv.id || sendingSelected}
               >
                 {sendingId === inv.id ? <Spinner className="h-3.5 w-3.5" /> : null} Send
               </button>
@@ -912,7 +979,9 @@ export function Outreach() {
                 )}
               </div>
 
-              {shopId && <PendingInvitationsPanel campaignId={campaignId} shopId={shopId} />}
+              {shopId && (
+                <PendingInvitationsPanel campaignId={campaignId} shopId={shopId} composedSubject={subject} composedBody={body} />
+              )}
 
               <div>
                 <label className="label">
