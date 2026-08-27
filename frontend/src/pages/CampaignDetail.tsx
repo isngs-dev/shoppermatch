@@ -632,7 +632,25 @@ function RecommendationsTab({
             </div>
           </div>
 
-          {visible.length === 0 ? (
+          {visible.length === 0 && !showMore && potentialAndLow.length > 0 ? (
+            // The default view only shows Top/Strong matches — zero of
+            // those existing doesn't mean zero candidates exist. Say so
+            // directly instead of a bare "No candidates found" that reads
+            // as broken when there are actually N eligible people one click
+            // away, just not classified as a strong fit.
+            <div className="card flex flex-col items-center gap-3 py-10 text-center">
+              <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                No Top or Strong matches — {potentialAndLow.length} potential/low match{potentialAndLow.length === 1 ? "" : "es"} available
+              </div>
+              <p className="max-w-sm text-sm text-slate-500 dark:text-slate-400">
+                These candidates were found but scored lower on fit. Review them, or expand the search radius above
+                to look further afield.
+              </p>
+              <button className="btn-primary" onClick={() => setShowMore(true)}>
+                Show Potential Matches
+              </button>
+            </div>
+          ) : visible.length === 0 ? (
             <div className="card">
               <EmptyState title="No candidates found" hint="Try expanding the search radius or check shopper availability." />
             </div>
@@ -652,7 +670,7 @@ function RecommendationsTab({
             </div>
           )}
 
-          {!showMore && potentialAndLow.length > 0 && (
+          {!showMore && visible.length > 0 && potentialAndLow.length > 0 && (
             <div className="text-center">
               <button className="btn-secondary" onClick={() => setShowMore(true)}>
                 Show More Candidates ({potentialAndLow.length})
