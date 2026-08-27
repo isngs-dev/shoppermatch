@@ -175,6 +175,10 @@ type ShopperOption = {
   availability_status: string | null;
   match_score: number | null;
   classification: string | null;
+  // Only set in combined (multi-shop) mode — which shop this candidate was
+  // recommended for, since a single composed send can now cover several.
+  shopId?: string;
+  shopName?: string;
 };
 
 // Email Automation deliberately isn't a tab here — it isn't scoped to one
@@ -376,7 +380,13 @@ export function Outreach() {
   const settingsApi = useApi(() => api.settingsInfo());
 
   const [campaignId, setCampaignId] = useState("");
-  const [shopId, setShopId] = useState("");
+  // Multiple shops can be selected at once ("combined" mode) — `shopId`
+  // stays as the single-shop derived value the rest of this component
+  // (recs fetch, PendingInvitationsPanel, draft preview) already assumes;
+  // it's only meaningful when exactly one shop is checked.
+  const [selectedShopIds, setSelectedShopIds] = useState<Set<string>>(new Set());
+  const isMultiShop = selectedShopIds.size > 1;
+  const shopId = selectedShopIds.size === 1 ? Array.from(selectedShopIds)[0] : "";
   const [shopperId, setShopperId] = useState("");
   const [recipientEmail, setRecipientEmail] = useState("");
   const [shops, setShops] = useState<any[]>([]);
@@ -390,6 +400,17 @@ export function Outreach() {
   const recs = useApi(
     () => (shopId ? api.aiShopRecommendations(campaignId, shopId, { limit: 15 }) : Promise.resolve(null)),
     [shopId]
+  );
+
+  // Combined mode (multiple shops checked): reuses the same campaign-wide
+  // AI Assignment Optimization the "Auto Assign Shoppers" card uses — one
+  // shopper is never proposed for two shops in the same pass, and each
+  // shop's own required_shoppers count is respected. Runs across the whole
+  // campaign and gets filtered down to just the checked shops below, since
+  // the optimizer has no "restrict to this subset" mode of its own.
+  const combinedRecs = useApi(
+    () => (isMultiShop ? api.aiOptimizeAssignments(campaignId) : Promise.resolve(null)),
+    [campaignId, isMultiShop]
   );
 
   const [generating, setGenerating] = useState(false);
@@ -488,7 +509,8 @@ export function Outreach() {
     api.campaignShops(campaignId).then((r) => {
       setShops(r.items);
       const preferred = preselectedShopId && r.items.some((s: any) => s.id === preselectedShopId);
-      setShopId(preferred ? preselectedShopId : r.items[0]?.id || "");
+      const initial = preferred ? preselectedShopId : r.items[0]?.id;
+      setSelectedShopIds(initial ? new Set([initial]) : new Set());
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId]);
@@ -502,7 +524,7 @@ export function Outreach() {
     setShopperId("");
     setBulkSelected(new Set());
     setBulkResult(null);
-  }, [shopId]);
+  }, [selectedShopIds]);
 
   // Drives the single-recipient extras (AI personalization, Send Test,
   // breakdown) off whichever shopper is selected — `shopperId` only ever
@@ -536,7 +558,7 @@ export function Outreach() {
   const bulkWillSendCount = Math.min(bulkSelectedIds.length, batchSize * iterations);
 
   async function sendBulk() {
-    if (!campaignId || !shopId || bulkSelectedIds.length === 0) {
+    if (!campaignId || (!shopId && !isMultiShop) || bulkSelectedIds.length === 0) {
       toast("Select at least one shopper first.", "error");
       return;
     }
@@ -545,37 +567,64 @@ export function Outreach() {
       return;
     }
     const targets = bulkSelectedIds.slice(0, bulkWillSendCount);
-    const batches: string[][] = [];
-    for (let i = 0; i < targets.length; i += batchSize) {
-      batches.push(targets.slice(i, i + batchSize));
+
+    // Combined mode spans several shops in one send — group targets by
+    // their proposed shop first (createBulkInvitations takes one shop_id
+    // per call), then chunk each shop's group by batchSize same as before.
+    // Single-shop mode is just one group, same behavior as always.
+    const groups: { shopId: string; shopperIds: string[] }[] = isMultiShop
+      ? Array.from(
+          targets.reduce((byShop, id) => {
+            const sid = shopperShopMap.get(id);
+            if (!sid) return byShop;
+            byShop.set(sid, [...(byShop.get(sid) || []), id]);
+            return byShop;
+          }, new Map<string, string[]>())
+        ).map(([sid, ids]) => ({ shopId: sid, shopperIds: ids }))
+      : [{ shopId, shopperIds: targets }];
+
+    const batches: { shopId: string; shopperIds: string[] }[] = [];
+    for (const g of groups) {
+      for (let i = 0; i < g.shopperIds.length; i += batchSize) {
+        batches.push({ shopId: g.shopId, shopperIds: g.shopperIds.slice(i, i + batchSize) });
+      }
     }
 
     setBulkSending(true);
     setBulkResult(null);
     const created: any[] = [];
     const failed: any[] = [];
-    try {
-      for (let i = 0; i < batches.length; i++) {
-        setBulkProgress({ batch: i + 1, totalBatches: batches.length });
+    // Each batch is caught individually — combined mode can span several
+    // shops in one send, and one shop's over-selection guard (or any other
+    // per-shop rejection) rejecting its batch must not throw away results
+    // already created for a different shop earlier in the same loop.
+    for (let i = 0; i < batches.length; i++) {
+      setBulkProgress({ batch: i + 1, totalBatches: batches.length });
+      try {
         const res = await api.createBulkInvitations({
           campaign_id: campaignId,
-          shop_id: shopId,
-          shopper_ids: batches[i],
+          shop_id: batches[i].shopId,
+          shopper_ids: batches[i].shopperIds,
           auto_send: true,
           custom_subject: subject,
           custom_html: body,
         });
         created.push(...res.created);
         failed.push(...res.failed);
+      } catch (e: any) {
+        const shopName = shops.find((s: any) => s.id === batches[i].shopId)?.shop_name || batches[i].shopId;
+        failed.push(
+          ...batches[i].shopperIds.map((id) => ({
+            shopper_id: id,
+            error: e?.message || `Failed for ${shopName}`,
+          }))
+        );
       }
-      setBulkResult({ created, failed });
-      toast(`Bulk send queued: ${created.length} invitation(s) created${failed.length ? `, ${failed.length} failed` : ""}.`, failed.length ? "info" : "success");
-    } catch (e: any) {
-      toast(e?.message || "Bulk send failed", "error");
-    } finally {
-      setBulkSending(false);
-      setBulkProgress(null);
     }
+    setBulkResult({ created, failed });
+    toast(`Bulk send queued: ${created.length} invitation(s) created${failed.length ? `, ${failed.length} failed` : ""}.`, failed.length ? "info" : "success");
+    setBulkSending(false);
+    setBulkProgress(null);
   }
 
   // Candidates come from the AI matching engine for the selected shop —
@@ -583,6 +632,23 @@ export function Outreach() {
   // roster) is kept only as an email lookup and as a fallback while
   // recommendations are loading or if a shop has none.
   const shopperOptions = useMemo((): ShopperOption[] => {
+    if (isMultiShop) {
+      const proposals = (combinedRecs.data?.proposals || []) as any[];
+      return proposals
+        .filter((p) => selectedShopIds.has(p.shop_id))
+        .map(
+          (p): ShopperOption => ({
+            id: p.shopper_id,
+            name: p.shopper_name,
+            city: null,
+            availability_status: null,
+            match_score: p.match_score ?? null,
+            classification: null,
+            shopId: p.shop_id,
+            shopName: p.shop_name,
+          })
+        );
+    }
     const candidates = recs.data?.recommendations || [];
     if (candidates.length) {
       return candidates.map(
@@ -606,7 +672,18 @@ export function Outreach() {
         classification: null,
       })
     );
-  }, [recs.data, shoppers.data]);
+  }, [isMultiShop, combinedRecs.data, selectedShopIds, recs.data, shoppers.data]);
+
+  // Maps a selected shopper back to which shop they were recommended for —
+  // only meaningful/populated in combined mode, used by sendBulk to route
+  // each shopper's invitation to the right shop.
+  const shopperShopMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const o of shopperOptions) {
+      if (o.shopId) map.set(o.id, o.shopId);
+    }
+    return map;
+  }, [shopperOptions]);
 
   useEffect(() => {
     if (!shopperOptions.length) return;
@@ -614,6 +691,29 @@ export function Outreach() {
       setShopperId(shopperOptions[0].id);
     }
   }, [shopperOptions]);
+
+  // Auto-fulfill the selected shop's requirement: pre-select exactly its
+  // required_shoppers count from the top of the ranked candidate list
+  // (already sorted best-match-first by the matching engine), instead of
+  // starting empty and making the client manually pick every time they
+  // switch shops. Keyed on recs.data (not shopperOptions, which is a new
+  // array reference every render) so this only fires once per actual shop
+  // change, not on every re-render — "Select all"/"Clear" below still
+  // override it manually whenever needed.
+  useEffect(() => {
+    if (!shopperOptions.length) return;
+    if (isMultiShop) {
+      // The optimizer already returned exactly the right set — one
+      // proposal per shop's requirement, no shopper double-booked across
+      // shops — so select all of it rather than re-slicing by count.
+      setBulkSelected(new Set(shopperOptions.map((s) => s.id)));
+      return;
+    }
+    const required = shops.find((s: any) => s.id === shopId)?.required_shoppers || 0;
+    if (required <= 0) return;
+    setBulkSelected(new Set(shopperOptions.slice(0, required).map((s) => s.id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recs.data, combinedRecs.data]);
 
   const selectedShopper = useMemo(
     () => shopperOptions.find((s) => s.id === shopperId),
@@ -626,8 +726,12 @@ export function Outreach() {
   // it exactly like the real preview — the client sees precisely what will
   // go out before committing to Generate/Send, and can keep editing.
   const draftCampaign = allCampaigns.find((c) => c.id === campaignId);
-  const draftShop = shops.find((s) => s.id === shopId);
-  const draftShopperName = shopperOptions.find((o) => o.id === Array.from(bulkSelected)[0])?.name;
+  const firstSelectedShopper = shopperOptions.find((o) => o.id === Array.from(bulkSelected)[0]);
+  // In combined mode there's no single selected shop — fall back to
+  // whichever shop the first selected shopper was actually proposed for,
+  // so the draft preview shows real data instead of going blank.
+  const draftShop = shops.find((s) => s.id === (shopId || firstSelectedShopper?.shopId));
+  const draftShopperName = firstSelectedShopper?.name;
   const draftContext = useMemo(() => {
     const location = [draftShop?.city, draftShop?.state].filter(Boolean).join(", ");
     return {
@@ -963,19 +1067,65 @@ export function Outreach() {
                 )}
               </div>
               <div>
-                <label className="label">Shop</label>
+                <div className="flex items-center justify-between">
+                  <label className="label !mb-0">
+                    Shop{isMultiShop ? ` — ${selectedShopIds.size} selected, combined requirement` : ""}
+                  </label>
+                  {shops.length > 1 && (
+                    <div className="flex gap-2 text-[11px]">
+                      <button
+                        type="button"
+                        className="font-semibold text-brand-600 hover:underline dark:text-brand-400"
+                        onClick={() => setSelectedShopIds(new Set(shops.map((s: any) => s.id)))}
+                      >
+                        Select all
+                      </button>
+                      <button
+                        type="button"
+                        className="font-semibold text-slate-400 hover:underline"
+                        onClick={() => setSelectedShopIds(new Set())}
+                      >
+                        Deselect all
+                      </button>
+                    </div>
+                  )}
+                </div>
                 {campaignId && !shops.length ? (
-                  <div className="input flex items-center text-sm text-slate-400">
+                  <div className="input mt-1.5 flex items-center text-sm text-slate-400">
                     <Spinner className="mr-2 h-4 w-4" /> Loading shops…
                   </div>
                 ) : (
-                  <select className="input" value={shopId} onChange={(e) => setShopId(e.target.value)} disabled={!shops.length}>
+                  <div className="mt-1.5 max-h-40 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
                     {shops.map((s: any) => (
-                      <option key={s.id} value={s.id}>
-                        {s.shop_name} — {s.city}
-                      </option>
+                      <label
+                        key={s.id}
+                        className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedShopIds.has(s.id)}
+                          onChange={() =>
+                            setSelectedShopIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(s.id)) next.delete(s.id);
+                              else next.add(s.id);
+                              return next;
+                            })
+                          }
+                        />
+                        <span className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">
+                          {s.shop_name} — {s.city}
+                        </span>
+                        <span className="shrink-0 text-xs text-slate-400">requires {s.required_shoppers}</span>
+                      </label>
                     ))}
-                  </select>
+                  </div>
+                )}
+                {isMultiShop && (
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    AI Recommendations below combines all {selectedShopIds.size} shops — the same shopper is never
+                    proposed for two of them, and each shop's own required count is respected.
+                  </p>
                 )}
               </div>
 
@@ -988,7 +1138,7 @@ export function Outreach() {
                   Shopper(s) {campaignType === "upcoming" ? "(recommended candidates)" : "(AI recommended)"} —{" "}
                   {bulkSelected.size} selected
                 </label>
-                {shopId && recs.loading && !recs.data ? (
+                {(shopId && recs.loading && !recs.data) || (isMultiShop && combinedRecs.loading && !combinedRecs.data) ? (
                   <div className="input flex items-center text-sm text-slate-400">
                     <Spinner className="mr-2 h-4 w-4" /> AI is matching shoppers…
                   </div>
@@ -1009,7 +1159,7 @@ export function Outreach() {
                         className="font-semibold text-slate-400 hover:underline"
                         onClick={() => setBulkSelected(new Set())}
                       >
-                        Clear
+                        Deselect all
                       </button>
                     </div>
                     <div className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
@@ -1020,7 +1170,7 @@ export function Outreach() {
                         >
                           <input type="checkbox" checked={bulkSelected.has(s.id)} onChange={() => toggleBulkSelected(s.id)} />
                           <span className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">
-                            {s.name} — {s.city} ({s.availability_status})
+                            {s.shopName ? `${s.name} — for ${s.shopName}` : `${s.name} — ${s.city} (${s.availability_status})`}
                           </span>
                           {s.match_score != null && (
                             <span className="shrink-0 text-xs font-semibold text-brand-600 dark:text-brand-400">{s.match_score}%</span>
