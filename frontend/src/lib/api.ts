@@ -229,8 +229,8 @@ export const api = {
     request("/api/ai/acceptance-probability" + qs({ shopper_id: shopperId, shop_id: shopId })),
   aiCampaignHealth: (campaignId: string) => request(`/api/ai/campaigns/${campaignId}/health`),
   aiCampaignPerformance: (campaignId: string) => request(`/api/ai/campaigns/${campaignId}/performance`),
-  aiOptimizeAssignments: (campaignId: string) =>
-    request(`/api/ai/campaigns/${campaignId}/optimize-assignments`, { method: "POST" }),
+  aiOptimizeAssignments: (campaignId: string, radiusKm?: number) =>
+    request(`/api/ai/campaigns/${campaignId}/optimize-assignments` + qs({ radius_km: radiusKm }), { method: "POST" }),
   aiAnomalies: () => request("/api/ai/anomalies"),
   aiDataQuality: () => request("/api/ai/data-quality"),
   aiFeedbackAnalysis: (campaignId: string) => request(`/api/ai/campaigns/${campaignId}/feedback-analysis`),

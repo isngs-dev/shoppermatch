@@ -743,15 +743,15 @@ function RecommendationsTab({
 
 function AutoAssignCard({ campaignId }: { campaignId: string }) {
   const toast = useToast();
+  const [radius, setRadius] = useState(25);
   const [optimizing, setOptimizing] = useState(false);
   const [proposal, setProposal] = useState<any | null>(null);
   const [approving, setApproving] = useState(false);
 
   async function optimize() {
     setOptimizing(true);
-    setProposal(null);
     try {
-      const res = await api.aiOptimizeAssignments(campaignId);
+      const res = await api.aiOptimizeAssignments(campaignId, radius);
       setProposal(res);
     } catch (e: any) {
       toast(e?.message || "Failed to optimize assignments", "error");
@@ -786,14 +786,27 @@ function AutoAssignCard({ campaignId }: { campaignId: string }) {
 
   return (
     <div className="card p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">AI Assignment Optimization</h3>
           <p className="text-xs text-slate-400">Finds the best shopper-to-shop assignment across this whole campaign.</p>
         </div>
-        <button className="btn-secondary" onClick={optimize} disabled={optimizing}>
-          {optimizing ? <Spinner /> : null} Auto Assign Shoppers
-        </button>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="label">Search radius (km)</label>
+            <input
+              type="number"
+              min={1}
+              className="input h-9 w-28"
+              value={radius}
+              onChange={(e) => setRadius(Number(e.target.value) || 0)}
+            />
+          </div>
+          <button className="btn-secondary" onClick={optimize} disabled={optimizing}>
+            {optimizing ? <Spinner /> : <IconSparkles width={16} height={16} />}
+            {optimizing ? "Analyzing…" : proposal ? "🔄 Re-run Analysis" : "Auto Assign Shoppers"}
+          </button>
+        </div>
       </div>
 
       {proposal && (
@@ -817,7 +830,12 @@ function AutoAssignCard({ campaignId }: { campaignId: string }) {
                 {proposal.proposals.map((p: any, i: number) => (
                   <tr key={i}>
                     <td className="td">{p.shop_name}</td>
-                    <td className="td font-medium text-slate-800 dark:text-slate-100">{p.shopper_name}</td>
+                    <td className="td font-medium text-slate-800 dark:text-slate-100">
+                      {p.shopper_name}
+                      {p.reasons?.length > 0 && (
+                        <div className="text-[11px] font-normal text-slate-400">{p.reasons.join(" · ")}</div>
+                      )}
+                    </td>
                     <td className="td text-right">{p.match_score}%</td>
                     <td className="td text-right">{p.distance_km != null ? `${p.distance_km} km` : "—"}</td>
                   </tr>
@@ -826,10 +844,16 @@ function AutoAssignCard({ campaignId }: { campaignId: string }) {
             </table>
           </div>
           {proposal.unfilled.length > 0 && (
-            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-              ⚠ {proposal.unfilled.length} shop(s) could not be fully staffed:{" "}
-              {proposal.unfilled.map((u: any) => `${u.shop_name} (${u.unfilled_slots} unfilled)`).join(", ")}
-            </p>
+            <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+              <div className="font-semibold">⚠ {proposal.unfilled.length} shop(s) could not be fully staffed</div>
+              <ul className="mt-1 space-y-0.5">
+                {proposal.unfilled.map((u: any, i: number) => (
+                  <li key={i}>
+                    {u.shop_name}: {u.unfilled_slots} unfilled — {u.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
           <div className="flex justify-end gap-2">
             <button className="btn-secondary" onClick={() => setProposal(null)}>

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -164,11 +164,12 @@ async def campaign_performance_endpoint(
 @router.post("/campaigns/{campaign_id}/optimize-assignments")
 async def optimize_assignments_endpoint(
     campaign_id: uuid.UUID,
+    radius_km: float | None = Query(default=None, gt=0),
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_operator),
 ):
     campaign = enforce_campaign_access(await session.get(Campaign, campaign_id), user)
-    result = await assignment_optimizer.optimize_assignments(session, campaign)
+    result = await assignment_optimizer.optimize_assignments(session, campaign, radius_km=radius_km)
     await record_audit(
         session,
         action="ai.assignment_optimization_generated",

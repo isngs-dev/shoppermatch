@@ -15,14 +15,16 @@ from ...models import Campaign, Shop, Shopper
 from ..semantic_matching import run_matching
 
 
-async def optimize_assignments(session: AsyncSession, campaign: Campaign) -> dict:
+async def optimize_assignments(session: AsyncSession, campaign: Campaign, radius_km: float | None = None) -> dict:
     shops = (await session.execute(select(Shop).where(Shop.campaign_id == campaign.id))).scalars().all()
     shoppers = (await session.execute(select(Shopper))).scalars().all()
 
     per_shop_results = []
+    eligible_counts: dict[str, int] = {}
     for shop in shops:
-        result = run_matching(list(shoppers), shop, campaign)
+        result = run_matching(list(shoppers), shop, campaign, radius_km=radius_km)
         per_shop_results.append((shop, result["recommendations"]))
+        eligible_counts[str(shop.id)] = result["eligible_count"]
 
     # Hardest-first: fewer eligible candidates means less flexibility later.
     per_shop_results.sort(key=lambda pair: len(pair[1]))
@@ -52,13 +54,23 @@ async def optimize_assignments(session: AsyncSession, campaign: Campaign) -> dic
                     "shopper_name": cand["name"],
                     "match_score": cand["match_score"],
                     "distance_km": cand["distance_km"],
+                    "reasons": (cand.get("reasons") or [])[:3],
                 }
             )
             if cand["distance_km"] is not None:
                 distances.append(cand["distance_km"])
 
         if len(chosen) < slots_needed:
-            unfilled.append({"shop_id": str(shop.id), "shop_name": shop.shop_name, "unfilled_slots": slots_needed - len(chosen)})
+            unfilled.append({
+                "shop_id": str(shop.id),
+                "shop_name": shop.shop_name,
+                "unfilled_slots": slots_needed - len(chosen),
+                # Why: either the candidate pool ran dry (few/no eligible
+                # people for this shop at all) or it was contested (enough
+                # eligible people existed, but this campaign's other shops
+                # claimed them first in the hardest-first pass).
+                "reason": "no eligible candidates" if eligible_counts.get(str(shop.id), 0) <= len(chosen) else "candidates claimed by other shops",
+            })
 
     total_slots = sum(s.required_shoppers for s in shops) or 1
     filled_slots = len(proposals)
