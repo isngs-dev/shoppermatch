@@ -7,7 +7,7 @@ import { CampaignMapTab, ShopDetailDrawer } from "../components/ShopMap";
 import { IconClock, IconMail, IconSend, IconSparkles, IconTarget, IconUsers } from "../components/Icons";
 import { Avatar, Badge, CheckCell, EmptyState, KpiCard, Loading, Spinner, useToast } from "../components/ui";
 import { api } from "../lib/api";
-import { classNames, fmtDate, fmtDateTime, statusBadgeClass } from "../lib/format";
+import { classNames, fmtDate, statusBadgeClass } from "../lib/format";
 import { useApi } from "../lib/useApi";
 import { ErrorBox } from "./Dashboard";
 
@@ -26,7 +26,6 @@ const TABS = [
   { key: "outreach", label: "Outreach" },
   { key: "tracking", label: "Tracking" },
   { key: "insights", label: "Insights" },
-  { key: "audit-logs", label: "Audit Logs" },
 ];
 
 export function CampaignDetail({ id }: { id: string }) {
@@ -129,7 +128,6 @@ export function CampaignDetail({ id }: { id: string }) {
       {activeTab === "outreach" && <OutreachTab campaignId={id} bucket={bucket} />}
       {activeTab === "tracking" && <TrackingTab campaignId={id} />}
       {activeTab === "insights" && <InsightsTab campaignId={id} bucket={bucket} campaignName={c.name} />}
-      {activeTab === "audit-logs" && <AuditLogsTab campaignName={c.name} />}
 
       {detailShopId && (
         <ShopDetailDrawer
@@ -1409,47 +1407,3 @@ function AiFeedbackCard({ campaignId }: { campaignId: string }) {
   );
 }
 
-// ------------------------------ Audit Logs ------------------------------ //
-function AuditLogsTab({ campaignName }: { campaignName: string }) {
-  const { data, loading, error, reload } = useApi(() => api.auditLogs());
-  if (loading && !data) return <Loading label="Loading audit logs…" />;
-  if (error) return <ErrorBox message={error} onRetry={reload} />;
-
-  const rows = (data.items || []).filter((a: any) => a.meta?.campaign === campaignName);
-
-  return (
-    <div className="card overflow-x-auto">
-      <table className="min-w-full">
-        <thead className="border-b border-slate-100 dark:border-slate-800">
-          <tr>
-            <th className="th">Time</th>
-            <th className="th">Actor</th>
-            <th className="th">Action</th>
-            <th className="th">Summary</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
-          {rows.map((a: any) => (
-            <tr key={a.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-              <td className="td whitespace-nowrap text-slate-500">{fmtDateTime(a.created_at)}</td>
-              <td className="td">{a.actor}</td>
-              <td className="td">
-                <span className="badge bg-slate-100 font-mono text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                  {a.action}
-                </span>
-              </td>
-              <td className="td">{a.summary}</td>
-            </tr>
-          ))}
-          {rows.length === 0 && (
-            <tr>
-              <td colSpan={4} className="td py-10 text-center text-slate-400">
-                No audit entries for this campaign yet.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
