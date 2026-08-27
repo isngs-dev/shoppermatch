@@ -303,7 +303,6 @@ function ShoppersTab({ campaignId }: { campaignId: string }) {
             <th className="th">Category</th>
             <th className="th">Availability</th>
             <th className="th">Invitation</th>
-            <th className="th">Response</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
@@ -324,18 +323,11 @@ function ShoppersTab({ campaignId }: { campaignId: string }) {
               <td className="td">
                 <Badge className={statusBadgeClass(s.latest_status)}>{s.latest_status}</Badge>
               </td>
-              <td className="td">
-                {s.latest_response ? (
-                  <Badge className={statusBadgeClass(s.latest_response)}>{s.latest_response}</Badge>
-                ) : (
-                  <span className="text-slate-300 dark:text-slate-600">—</span>
-                )}
-              </td>
             </tr>
           ))}
           {data.items.length === 0 && (
             <tr>
-              <td colSpan={6} className="td py-10 text-center text-slate-400">
+              <td colSpan={5} className="td py-10 text-center text-slate-400">
                 No shoppers invited to this campaign yet.
               </td>
             </tr>
