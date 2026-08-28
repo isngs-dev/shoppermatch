@@ -549,39 +549,11 @@ function RecommendationsTab({
       <AutoAssignCard campaignId={campaignId} />
       {shopId && <OutreachPriorityCard campaignId={campaignId} shopId={shopId} />}
 
-      <div className="card flex flex-wrap items-end gap-3 p-4">
-        <div>
-          <label className="label">Shop</label>
-          <select className="input h-9 w-72" value={shopId} onChange={(e) => setShopId(e.target.value)}>
-            {shops.data.items.map((s: any) => (
-              <option key={s.id} value={s.id}>
-                {s.shop_name} — {s.city}
-              </option>
-            ))}
-          </select>
+      {running && (
+        <div className="flex items-center gap-1.5 text-xs text-slate-400">
+          <Spinner /> Analyzing shopper profiles…
         </div>
-        <div>
-          <label className="label">Search radius (km)</label>
-          <input
-            type="number"
-            min={1}
-            className="input h-9 w-28"
-            value={radius}
-            onChange={(e) => setRadius(Number(e.target.value) || 0)}
-            onBlur={() => runMatching()}
-          />
-        </div>
-        <div className="ml-auto flex items-center gap-4 text-xs text-slate-400">
-          {running && (
-            <span className="flex items-center gap-1.5">
-              <Spinner /> Analyzing shopper profiles…
-            </span>
-          )}
-          <span>
-            Required shoppers <span className="font-semibold text-slate-700 dark:text-slate-200">{required}</span>
-          </span>
-        </div>
-      </div>
+      )}
 
       {runError && <ErrorBox message={runError} onRetry={runMatching} />}
 
