@@ -738,12 +738,24 @@ function AutoAssignCard({ campaignId }: { campaignId: string }) {
   const [optimizing, setOptimizing] = useState(false);
   const [proposal, setProposal] = useState<any | null>(null);
   const [approving, setApproving] = useState(false);
+  // Shops the over-selection cap blocked, keyed by shop id — kept around
+  // (rather than aborting the whole approve on the first one) so every
+  // OTHER shop's assignment still goes through, and the client can enable
+  // over-selection + retry just the shops that actually need it.
+  const [blocked, setBlocked] = useState<Record<string, { shopName: string; shopperIds: string[]; message: string }>>({});
+  // Shops already turned into real invitations — approveAll skips these on
+  // a retry pass so re-clicking "Retry Remaining" never double-creates
+  // invitations for shops that already succeeded.
+  const [approvedShopIds, setApprovedShopIds] = useState<Set<string>>(new Set());
+  const [retrying, setRetrying] = useState<string | null>(null);
 
   async function optimize() {
     setOptimizing(true);
     try {
       const res = await api.aiOptimizeAssignments(campaignId, radius);
       setProposal(res);
+      setBlocked({});
+      setApprovedShopIds(new Set());
     } catch (e: any) {
       toast(e?.message || "Failed to optimize assignments", "error");
     } finally {
@@ -755,23 +767,63 @@ function AutoAssignCard({ campaignId }: { campaignId: string }) {
     if (!proposal) return;
     setApproving(true);
     try {
-      const byShop = new Map<string, string[]>();
+      const byShop = new Map<string, { shopName: string; shopperIds: string[] }>();
       for (const p of proposal.proposals) {
-        const list = byShop.get(p.shop_id) || [];
-        list.push(p.shopper_id);
-        byShop.set(p.shop_id, list);
+        if (approvedShopIds.has(p.shop_id)) continue;
+        const entry = byShop.get(p.shop_id) || { shopName: p.shop_name, shopperIds: [] };
+        entry.shopperIds.push(p.shopper_id);
+        byShop.set(p.shop_id, entry);
       }
       let totalCreated = 0;
-      for (const [shopId, shopperIds] of byShop) {
-        const res = await api.approveAiRecommendations(campaignId, shopId, shopperIds);
-        totalCreated += res.count;
+      const nowBlocked: typeof blocked = {};
+      const newlyApproved: string[] = [];
+      for (const [shopId, { shopName, shopperIds }] of byShop) {
+        try {
+          const res = await api.approveAiRecommendations(campaignId, shopId, shopperIds);
+          totalCreated += res.count;
+          newlyApproved.push(shopId);
+        } catch (e: any) {
+          nowBlocked[shopId] = { shopName, shopperIds, message: e?.message || "Failed to approve this shop's assignment" };
+        }
       }
-      toast(`Approved ${totalCreated} assignment(s) — now available in Outreach.`, "success");
-      setProposal(null);
-    } catch (e: any) {
-      toast(e?.message || "Failed to approve assignments", "error");
+      setBlocked(nowBlocked);
+      if (newlyApproved.length) {
+        setApprovedShopIds((prev) => new Set([...prev, ...newlyApproved]));
+      }
+      const blockedCount = Object.keys(nowBlocked).length;
+      if (totalCreated > 0) {
+        toast(
+          `Approved ${totalCreated} assignment(s) — now available in Outreach.` +
+            (blockedCount ? ` ${blockedCount} shop(s) need over-selection enabled first.` : ""),
+          blockedCount ? "info" : "success"
+        );
+      } else if (blockedCount) {
+        toast(`${blockedCount} shop(s) need over-selection enabled first — see below.`, "error");
+      }
+      if (blockedCount === 0) setProposal(null);
     } finally {
       setApproving(false);
+    }
+  }
+
+  async function enableOverSelectionAndRetry(shopId: string) {
+    const entry = blocked[shopId];
+    if (!entry) return;
+    setRetrying(shopId);
+    try {
+      await api.setShopOverSelection(shopId, true);
+      const res = await api.approveAiRecommendations(campaignId, shopId, entry.shopperIds);
+      setBlocked((prev) => {
+        const next = { ...prev };
+        delete next[shopId];
+        return next;
+      });
+      setApprovedShopIds((prev) => new Set([...prev, shopId]));
+      toast(`Over-selection enabled for ${entry.shopName} — approved ${res.count} shopper(s).`, "success");
+    } catch (e: any) {
+      toast(e?.message || "Still failed to approve this shop", "error");
+    } finally {
+      setRetrying(null);
     }
   }
 
@@ -846,12 +898,27 @@ function AutoAssignCard({ campaignId }: { campaignId: string }) {
               </ul>
             </div>
           )}
+          {Object.entries(blocked).map(([shopId, entry]) => (
+            <div
+              key={shopId}
+              className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-300"
+            >
+              <div className="font-semibold">{entry.message}</div>
+              <button
+                className="mt-1.5 font-semibold underline disabled:opacity-50"
+                onClick={() => enableOverSelectionAndRetry(shopId)}
+                disabled={retrying === shopId}
+              >
+                {retrying === shopId ? "Adding…" : "Enable over-selection & add these shopper(s) anyway"}
+              </button>
+            </div>
+          ))}
           <div className="flex justify-end gap-2">
             <button className="btn-secondary" onClick={() => setProposal(null)}>
               Review Assignments
             </button>
             <button className="btn-primary" onClick={approveAll} disabled={approving}>
-              {approving ? <Spinner /> : null} Approve All
+              {approving ? <Spinner /> : null} {Object.keys(blocked).length ? "Retry Remaining" : "Approve All"}
             </button>
           </div>
         </div>
