@@ -419,8 +419,8 @@ function RecommendationsTab({
   // than reading the `radius` state — which wouldn't have committed yet in
   // the same handler (setState is async), so the request would silently go
   // out with the OLD radius even though the input already shows the new one.
-  async function runMatching(radiusOverride?: number) {
-    if (!shopId) return;
+  async function runMatching(radiusOverride?: number): Promise<any | null> {
+    if (!shopId) return null;
     setRunning(true);
     setRunError(null);
     try {
@@ -433,17 +433,31 @@ function RecommendationsTab({
       // "Show Potential Matches" click after every single run.
       const hasTopOrStrong = (r.classification_counts.top_match ?? 0) + (r.classification_counts.strong_match ?? 0) > 0;
       setShowMore(!hasTopOrStrong);
+      return r;
     } catch (e: any) {
       setRunError(e?.message || "AI matching failed");
+      return null;
     } finally {
       setRunning(false);
     }
   }
 
-  function expandRadius() {
+  async function expandRadius() {
     const next = radius + 25;
+    const before = result?.excluded?.outside_radius ?? 0;
     setRadius(next);
-    runMatching(next);
+    const r = await runMatching(next);
+    // The button's whole promise is "closes the gap by looking further
+    // afield" — if the same shoppers are still outside the new radius too
+    // (common once the next real candidate is much farther away than one
+    // +25km step), say so explicitly instead of leaving the client to
+    // wonder why clicking it again did nothing.
+    if (r && (r.excluded?.outside_radius ?? 0) === before && before > 0) {
+      toast(
+        `No additional candidates found within ${next} km — the next-closest excluded shopper(s) are farther than that. Try expanding further or review potential matches.`,
+        "info"
+      );
+    }
   }
 
   function toggleSelect(id: string) {
