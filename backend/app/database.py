@@ -75,6 +75,19 @@ _RETROFIT_COLUMNS: list[tuple[str, str, str]] = [
     # Postgres, e.g. "INTEGER", "INTEGER DEFAULT 1", "VARCHAR(255)")
     ("email_automations", "batch_size", "INTEGER"),
     ("email_automations", "total_iterations", "INTEGER DEFAULT 1"),
+    ("email_automations", "step_template_ids", "JSON"),
+    ("shopper_automation_states", "shop_id", "VARCHAR(36)"),
+]
+
+# email_automations.shop_id started out NOT NULL (one automation per shop);
+# campaign-wide automations need it nullable. create_all() never alters an
+# existing column's constraints (only ADD COLUMN, via the retrofit above),
+# so an existing deploy's shop_id would otherwise stay NOT NULL forever and
+# every campaign-wide automation insert would fail. Postgres-only DDL
+# (ALTER COLUMN ... DROP NOT NULL isn't valid SQLite syntax at all); local
+# SQLite dev DBs get this from the Alembic migration's batch mode instead.
+_NULLABLE_COLUMNS: list[tuple[str, str]] = [
+    ("email_automations", "shop_id"),
 ]
 
 
@@ -93,3 +106,12 @@ async def _retrofit_columns(conn) -> None:
 
     for table, column, ddl_type in await conn.run_sync(_find_missing):
         await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+
+    if conn.dialect.name != "sqlite":
+        # DROP NOT NULL is a no-op (no error) when the column is already
+        # nullable, so this is safe to run unconditionally on every startup.
+        table_names = set(await conn.run_sync(lambda c: set(inspect(c).get_table_names())))
+        for table, column in _NULLABLE_COLUMNS:
+            if table not in table_names:
+                continue
+            await conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN {column} DROP NOT NULL"))
