@@ -568,17 +568,19 @@ function RecommendationsTab({
             className="input h-9 w-28"
             value={radius}
             onChange={(e) => setRadius(Number(e.target.value) || 0)}
+            onBlur={() => runMatching()}
           />
         </div>
         <div className="ml-auto flex items-center gap-4 text-xs text-slate-400">
+          {running && (
+            <span className="flex items-center gap-1.5">
+              <Spinner /> Analyzing shopper profiles…
+            </span>
+          )}
           <span>
             Required shoppers <span className="font-semibold text-slate-700 dark:text-slate-200">{required}</span>
           </span>
         </div>
-        <button className="btn-primary" onClick={() => runMatching()} disabled={running || !shopId}>
-          {running ? <Spinner /> : <IconSparkles width={16} height={16} />}
-          {running ? "Analyzing shopper profiles…" : result ? "🔄 Re-run Analysis" : "✨ Run AI Matching"}
-        </button>
       </div>
 
       {runError && <ErrorBox message={runError} onRetry={runMatching} />}
@@ -614,25 +616,45 @@ function RecommendationsTab({
             <MiniStat label="Potential" value={result.classification_counts.potential_match} accent="text-amber-600 dark:text-amber-400" />
           </div>
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               Candidate shortlist
             </div>
-            <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-xs font-semibold dark:bg-slate-800">
-              {(["top5", "top10", "all"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  className={
-                    "rounded-md px-3 py-1 " +
-                    (shortlist === mode
-                      ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white"
-                      : "text-slate-500 dark:text-slate-400")
-                  }
-                  onClick={() => setShortlist(mode)}
-                >
-                  {mode === "top5" ? "Top 5" : mode === "top10" ? "Top 10" : "All Eligible"}
-                </button>
-              ))}
+            <div className="flex items-center gap-3">
+              {visible.length > 0 && (
+                <div className="flex gap-2 text-[11px]">
+                  <button
+                    type="button"
+                    className="font-semibold text-brand-600 hover:underline dark:text-brand-400"
+                    onClick={() => setSelected(new Set(visible.map((r: any) => r.shopper_id)))}
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    className="font-semibold text-slate-400 hover:underline"
+                    onClick={() => setSelected(new Set())}
+                  >
+                    Deselect all
+                  </button>
+                </div>
+              )}
+              <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-xs font-semibold dark:bg-slate-800">
+                {(["top5", "top10", "all"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    className={
+                      "rounded-md px-3 py-1 " +
+                      (shortlist === mode
+                        ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white"
+                        : "text-slate-500 dark:text-slate-400")
+                    }
+                    onClick={() => setShortlist(mode)}
+                  >
+                    {mode === "top5" ? "Top 5" : mode === "top10" ? "Top 10" : "All Eligible"}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
