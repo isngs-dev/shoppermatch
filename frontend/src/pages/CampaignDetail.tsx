@@ -547,7 +547,6 @@ function RecommendationsTab({
       )}
 
       <AutoAssignCard campaignId={campaignId} />
-      {shopId && <OutreachPriorityCard campaignId={campaignId} shopId={shopId} />}
 
       {running && (
         <div className="flex items-center gap-1.5 text-xs text-slate-400">
@@ -855,48 +854,6 @@ function AutoAssignCard({ campaignId }: { campaignId: string }) {
               {approving ? <Spinner /> : null} Approve All
             </button>
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const PRIORITY_META: Record<string, string> = {
-  HIGH: "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
-  MEDIUM: "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300",
-  LOW: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
-};
-
-function OutreachPriorityCard({ campaignId, shopId }: { campaignId: string; shopId: string }) {
-  const { data, loading, error } = useApi(() => api.aiOutreachPriority(campaignId, shopId, 10), [campaignId, shopId]);
-  return (
-    <div className="card p-5">
-      <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">AI Outreach Prioritization</h3>
-      <p className="text-xs text-slate-400">
-        Who to contact first — combining match score, acceptance probability and campaign urgency.
-      </p>
-      {loading && !data ? (
-        <div className="mt-3"><Spinner /></div>
-      ) : error ? (
-        <p className="mt-3 text-sm text-rose-500">{error}</p>
-      ) : !data.items?.length ? (
-        <p className="mt-3 text-sm text-slate-400">No eligible candidates for this shop yet.</p>
-      ) : (
-        <div className="mt-3 space-y-2">
-          {data.items.map((p: any) => (
-            <div key={p.shopper_id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 px-3 py-2 text-sm dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <span className={"badge " + (PRIORITY_META[p.priority_tier] || PRIORITY_META.LOW)}>
-                  {p.priority_tier}
-                </span>
-                <span className="font-medium text-slate-800 dark:text-slate-100">{p.name}</span>
-              </div>
-              <div className="text-xs text-slate-400">
-                Match {p.match_score}% ·{" "}
-                {p.acceptance_probability != null ? `Accept ${p.acceptance_probability}%` : p.acceptance_label}
-              </div>
-            </div>
-          ))}
         </div>
       )}
     </div>
