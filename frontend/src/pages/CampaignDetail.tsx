@@ -748,7 +748,11 @@ function RecommendationsTab({
 
 function AutoAssignCard({ campaignId }: { campaignId: string }) {
   const toast = useToast();
-  const [radius, setRadius] = useState(25);
+  // Kept as raw text while typing (not a number) so backspacing to clear
+  // the field doesn't immediately snap back to a forced value — only
+  // clamped to a real number where it's actually used, below.
+  const [radiusInput, setRadiusInput] = useState("25");
+  const radius = Math.max(1, parseInt(radiusInput, 10) || 25);
   const [optimizing, setOptimizing] = useState(false);
   const [proposal, setProposal] = useState<any | null>(null);
   const [approving, setApproving] = useState(false);
@@ -855,8 +859,8 @@ function AutoAssignCard({ campaignId }: { campaignId: string }) {
               type="number"
               min={1}
               className="input h-9 w-28"
-              value={radius}
-              onChange={(e) => setRadius(Number(e.target.value) || 0)}
+              value={radiusInput}
+              onChange={(e) => setRadiusInput(e.target.value)}
             />
           </div>
           <button className="btn-secondary" onClick={optimize} disabled={optimizing}>
