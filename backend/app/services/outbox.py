@@ -29,7 +29,23 @@ class EmailJobStatus:
 
 
 async def enqueue_email(session, invitation: Invitation) -> EmailJob:
-    """Put an invitation into the durable outbox in the current transaction."""
+    """Put an invitation into the durable outbox in the current transaction.
+
+    `email_jobs.invitation_id` is unique — one job per invitation, by design.
+    An invitation whose job already reached a terminal state (sent/failed, or
+    even an old queued one after Send Follow-Up) still has that row, so a
+    second call here must reuse and reset it rather than INSERT a new one,
+    which would violate the unique constraint and 500."""
+    existing = invitation.email_job
+    if existing is not None:
+        existing.status = EmailJobStatus.QUEUED
+        existing.attempts = 0
+        existing.last_error = None
+        existing.attempted_at = None
+        existing.completed_at = None
+        existing.next_attempt_at = now()
+        await session.flush()
+        return existing
     job = EmailJob(
         invitation_id=invitation.id,
         provider=settings.email_provider.lower(),
