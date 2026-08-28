@@ -178,6 +178,13 @@ type ShopperOption = {
   // recommended for, since a single composed send can now cover several.
   shopId?: string;
   shopName?: string;
+  // Set when this shopper already has a real, created-but-unsent Invitation
+  // (e.g. approved earlier in AI Recommendations) — sending them here reuses
+  // that invitation via sendInvitation instead of creating a new one, so
+  // approving in one place and sending from this checklist can never
+  // double-invite the same shopper.
+  pendingInvitationId?: string;
+  pendingReference?: string;
 };
 
 // Template management lives on the Email Automation page (EmailTemplatesPanel,
@@ -187,171 +194,6 @@ type ShopperOption = {
 // it isn't scoped to one campaign (it runs across whichever campaign+shop you
 // pick from its own selector), so it stays a separate top-level page.
 
-// --------------------------------------------------------------------------- //
-// Shows invitations that were already approved (e.g. from AI Recommendations)
-// for this shop but haven't been emailed yet, with a direct Send action.
-// Reuses the existing invitation record via sendInvitation — never re-creates
-// it, so this can't trip the over-selection guard or double-invite anyone.
-// --------------------------------------------------------------------------- //
-function PendingInvitationsPanel({
-  campaignId,
-  shopId,
-  composedSubject,
-  composedBody,
-}: {
-  campaignId: string;
-  shopId: string;
-  composedSubject: string;
-  composedBody: string;
-}) {
-  const toast = useToast();
-  const { data, loading, reload } = useApi(
-    () => api.invitations({ campaign_id: campaignId, shop_id: shopId, status: "created" }),
-    [campaignId, shopId]
-  );
-  const [sendingId, setSendingId] = useState<string | null>(null);
-  const [sendingSelected, setSendingSelected] = useState(false);
-  // The backend flips an invitation's status to "sent" asynchronously (the
-  // outbox worker does it on actual delivery, not on enqueue), so a `reload()`
-  // right after a successful send can still show it as pending for a few
-  // seconds. Track "just sent" ids locally so the row disappears immediately.
-  const [justSent, setJustSent] = useState<Set<string>>(new Set());
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  const pending = ((data?.items || []) as any[]).filter((inv) => !justSent.has(inv.id));
-
-  // Default to everyone selected — most of the time that's exactly who
-  // should be sent, and it's faster to deselect a couple exceptions than to
-  // hand-pick from a list of 20+.
-  useEffect(() => {
-    setSelected(new Set(pending.map((inv) => inv.id)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data]);
-
-  if (!loading && pending.length === 0) return null;
-
-  // These invitations were created with a generic default subject/body at
-  // AI Recommendations approval time — without passing the current compose
-  // box content through, editing "Email Body" above would have no effect on
-  // anything sent from here (it only affected the separate bulk-compose
-  // flow). Only send it as a customization when there's actually something
-  // to send — an empty compose box shouldn't blank out the default.
-  const custom = composedSubject.trim() && composedBody.trim() ? { subject: composedSubject, html: composedBody } : null;
-
-  async function sendOne(id: string) {
-    setSendingId(id);
-    try {
-      await api.sendInvitation(id, custom?.subject, custom?.html);
-      toast("Queued for delivery.", "success");
-      setJustSent((prev) => new Set(prev).add(id));
-      reload();
-    } catch (e: any) {
-      toast(e?.message || "Failed to send", "error");
-    } finally {
-      setSendingId(null);
-    }
-  }
-
-  async function sendSelected() {
-    const targets = pending.filter((inv) => selected.has(inv.id));
-    if (targets.length === 0) return;
-    setSendingSelected(true);
-    try {
-      const results = await Promise.allSettled(
-        targets.map((inv) => api.sendInvitation(inv.id, custom?.subject, custom?.html))
-      );
-      const failed = results.filter((r) => r.status === "rejected").length;
-      const succeededIds = targets
-        .map((inv, i) => (results[i].status === "fulfilled" ? inv.id : null))
-        .filter((id): id is string => id !== null);
-      setJustSent((prev) => new Set([...prev, ...succeededIds]));
-      toast(
-        failed ? `Sent ${targets.length - failed} of ${targets.length}; ${failed} failed.` : `Sent ${targets.length} invitation(s).`,
-        failed ? "info" : "success"
-      );
-      reload();
-    } finally {
-      setSendingSelected(false);
-    }
-  }
-
-  function toggle(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <div className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-            {loading ? "Checking for approved candidates…" : `${pending.length} shopper(s) approved for this shop, not yet emailed`}
-          </div>
-          <p className="text-xs text-amber-700 dark:text-amber-400">
-            These were selected in AI Recommendations. Edit the message below first if you want to customize it,
-            then send.
-          </p>
-        </div>
-        {pending.length > 1 && (
-          <button
-            className="btn-primary !py-1.5 text-xs"
-            onClick={sendSelected}
-            disabled={sendingSelected || selected.size === 0}
-          >
-            {sendingSelected ? <Spinner className="h-3.5 w-3.5" /> : null} Send Selected ({selected.size})
-          </button>
-        )}
-      </div>
-      {pending.length > 1 && (
-        <div className="mt-2 flex gap-2 text-[11px]">
-          <button
-            type="button"
-            className="font-semibold text-amber-700 hover:underline dark:text-amber-400"
-            onClick={() => setSelected(new Set(pending.map((inv) => inv.id)))}
-          >
-            Select all
-          </button>
-          <button
-            type="button"
-            className="font-semibold text-amber-600/70 hover:underline dark:text-amber-500/70"
-            onClick={() => setSelected(new Set())}
-          >
-            Deselect all
-          </button>
-        </div>
-      )}
-      {pending.length > 0 && (
-        <ul className="mt-3 space-y-1.5">
-          {pending.map((inv) => (
-            <li
-              key={inv.id}
-              className="flex items-center justify-between gap-2 rounded-lg bg-white/70 px-3 py-2 text-sm dark:bg-slate-900/40"
-            >
-              <label className="flex min-w-0 cursor-pointer items-center gap-2.5">
-                <input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggle(inv.id)} />
-                <span className="min-w-0 truncate font-medium text-slate-800 dark:text-slate-100">
-                  {inv.shopper_name || inv.shopper_email}
-                  <span className="ml-2 text-xs font-normal text-slate-400">{inv.reference}</span>
-                </span>
-              </label>
-              <button
-                className="btn-secondary shrink-0 !py-1 text-xs"
-                onClick={() => sendOne(inv.id)}
-                disabled={sendingId === inv.id || sendingSelected}
-              >
-                {sendingId === inv.id ? <Spinner className="h-3.5 w-3.5" /> : null} Send
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
 
 export function Outreach() {
   const toast = useToast();
@@ -378,7 +220,7 @@ export function Outreach() {
   const [campaignId, setCampaignId] = useState("");
   // Multiple shops can be selected at once ("combined" mode) — `shopId`
   // stays as the single-shop derived value the rest of this component
-  // (recs fetch, PendingInvitationsPanel, draft preview) already assumes;
+  // (recs fetch, pending invitations fetch, draft preview) already assumes;
   // it's only meaningful when exactly one shop is checked.
   const [selectedShopIds, setSelectedShopIds] = useState<Set<string>>(new Set());
   const isMultiShop = selectedShopIds.size > 1;
@@ -407,6 +249,16 @@ export function Outreach() {
   const combinedRecs = useApi(
     () => (isMultiShop ? api.aiOptimizeAssignments(campaignId) : Promise.resolve(null)),
     [campaignId, isMultiShop]
+  );
+
+  // Invitations already approved for this shop (e.g. via AI Recommendations)
+  // but not yet emailed — folded into the checklist below instead of a
+  // separate panel, so there's exactly one place to select/send shoppers.
+  // Sending one of these reuses its existing Invitation (see sendBulk)
+  // rather than creating a duplicate.
+  const pendingInvitationsApi = useApi(
+    () => (shopId ? api.invitations({ campaign_id: campaignId, shop_id: shopId, status: "created" }) : Promise.resolve({ items: [] })),
+    [campaignId, shopId]
   );
 
   const [generating, setGenerating] = useState(false);
@@ -559,20 +411,28 @@ export function Outreach() {
     }
     const targets = bulkSelectedIds.slice(0, bulkWillSendCount);
 
+    // Anyone already approved earlier (a real, created-but-unsent
+    // Invitation) reuses that exact invitation via sendInvitation — never
+    // recreated — so approving in AI Recommendations and sending from this
+    // checklist can never double-invite the same shopper. Only shoppers
+    // with no existing invitation go through the create-and-send path below.
+    const alreadyPending = targets.filter((id) => pendingByShopperId.has(id));
+    const freshTargets = targets.filter((id) => !pendingByShopperId.has(id));
+
     // Combined mode spans several shops in one send — group targets by
     // their proposed shop first (createBulkInvitations takes one shop_id
     // per call), then chunk each shop's group by batchSize same as before.
     // Single-shop mode is just one group, same behavior as always.
     const groups: { shopId: string; shopperIds: string[] }[] = isMultiShop
       ? Array.from(
-          targets.reduce((byShop, id) => {
+          freshTargets.reduce((byShop, id) => {
             const sid = shopperShopMap.get(id);
             if (!sid) return byShop;
             byShop.set(sid, [...(byShop.get(sid) || []), id]);
             return byShop;
           }, new Map<string, string[]>())
         ).map(([sid, ids]) => ({ shopId: sid, shopperIds: ids }))
-      : [{ shopId, shopperIds: targets }];
+      : [{ shopId, shopperIds: freshTargets }];
 
     const batches: { shopId: string; shopperIds: string[] }[] = [];
     for (const g of groups) {
@@ -585,12 +445,28 @@ export function Outreach() {
     setBulkResult(null);
     const created: any[] = [];
     const failed: any[] = [];
+    const totalSteps = alreadyPending.length + batches.length;
+    let step = 0;
+
+    for (const id of alreadyPending) {
+      step += 1;
+      setBulkProgress({ batch: step, totalBatches: totalSteps });
+      const pending = pendingByShopperId.get(id)!;
+      try {
+        await api.sendInvitation(pending.id, subject, body);
+        created.push({ shopper_id: id, invitation_id: pending.id, reference: pending.reference });
+      } catch (e: any) {
+        failed.push({ shopper_id: id, error: e?.message || "Failed to send" });
+      }
+    }
+
     // Each batch is caught individually — combined mode can span several
     // shops in one send, and one shop's over-selection guard (or any other
     // per-shop rejection) rejecting its batch must not throw away results
     // already created for a different shop earlier in the same loop.
     for (let i = 0; i < batches.length; i++) {
-      setBulkProgress({ batch: i + 1, totalBatches: batches.length });
+      step += 1;
+      setBulkProgress({ batch: step, totalBatches: totalSteps });
       try {
         const res = await api.createBulkInvitations({
           campaign_id: campaignId,
@@ -613,15 +489,29 @@ export function Outreach() {
       }
     }
     setBulkResult({ created, failed });
-    toast(`Bulk send queued: ${created.length} invitation(s) created${failed.length ? `, ${failed.length} failed` : ""}.`, failed.length ? "info" : "success");
+    toast(`Bulk send queued: ${created.length} invitation(s) sent${failed.length ? `, ${failed.length} failed` : ""}.`, failed.length ? "info" : "success");
     setBulkSending(false);
     setBulkProgress(null);
+    pendingInvitationsApi.reload();
   }
 
   // Candidates come from the AI matching engine for the selected shop —
   // not a flat, unranked shopper list. `shoppers.data` (fetched once, full
   // roster) is kept only as an email lookup and as a fallback while
   // recommendations are loading or if a shop has none.
+  // Invitations already approved for this shop but not yet emailed, keyed
+  // by shopper id — used to (a) tag a candidate already in the AI list as
+  // "already approved" and (b) add anyone approved earlier who has since
+  // fallen out of the AI's top-N ranking, so nobody with a real pending
+  // invitation is ever left invisible/unsendable from this checklist.
+  const pendingByShopperId = useMemo(() => {
+    const map = new Map<string, { id: string; reference: string }>();
+    for (const inv of (pendingInvitationsApi.data?.items || []) as any[]) {
+      if (inv.shopper_id) map.set(inv.shopper_id, { id: inv.id, reference: inv.reference });
+    }
+    return map;
+  }, [pendingInvitationsApi.data]);
+
   const shopperOptions = useMemo((): ShopperOption[] => {
     if (isMultiShop) {
       const proposals = (combinedRecs.data?.proposals || []) as any[];
@@ -640,30 +530,58 @@ export function Outreach() {
           })
         );
     }
+
+    const withPending = (list: ShopperOption[]): ShopperOption[] => {
+      const seen = new Set(list.map((o) => o.id));
+      const merged = list.map((o) => {
+        const pending = pendingByShopperId.get(o.id);
+        return pending ? { ...o, pendingInvitationId: pending.id, pendingReference: pending.reference } : o;
+      });
+      for (const inv of (pendingInvitationsApi.data?.items || []) as any[]) {
+        if (!inv.shopper_id || seen.has(inv.shopper_id)) continue;
+        merged.push({
+          id: inv.shopper_id,
+          name: inv.shopper_name || inv.shopper_email,
+          city: null,
+          availability_status: null,
+          match_score: null,
+          classification: null,
+          pendingInvitationId: inv.id,
+          pendingReference: inv.reference,
+        });
+        seen.add(inv.shopper_id);
+      }
+      return merged;
+    };
+
     const candidates = recs.data?.recommendations || [];
     if (candidates.length) {
-      return candidates.map(
-        (r: any): ShopperOption => ({
-          id: r.shopper_id,
-          name: r.name,
-          city: r.city,
-          availability_status: r.availability,
-          match_score: r.match_score ?? null,
-          classification: r.classification ?? null,
-        })
+      return withPending(
+        candidates.map(
+          (r: any): ShopperOption => ({
+            id: r.shopper_id,
+            name: r.name,
+            city: r.city,
+            availability_status: r.availability,
+            match_score: r.match_score ?? null,
+            classification: r.classification ?? null,
+          })
+        )
       );
     }
-    return (shoppers.data?.items || []).map(
-      (s: any): ShopperOption => ({
-        id: s.id,
-        name: s.name,
-        city: s.city,
-        availability_status: s.availability_status,
-        match_score: null,
-        classification: null,
-      })
+    return withPending(
+      (shoppers.data?.items || []).map(
+        (s: any): ShopperOption => ({
+          id: s.id,
+          name: s.name,
+          city: s.city,
+          availability_status: s.availability_status,
+          match_score: null,
+          classification: null,
+        })
+      )
     );
-  }, [isMultiShop, combinedRecs.data, selectedShopIds, recs.data, shoppers.data]);
+  }, [isMultiShop, combinedRecs.data, selectedShopIds, recs.data, shoppers.data, pendingByShopperId, pendingInvitationsApi.data]);
 
   // Maps a selected shopper back to which shop they were recommended for —
   // only meaningful/populated in combined mode, used by sendBulk to route
@@ -700,11 +618,15 @@ export function Outreach() {
       setBulkSelected(new Set(shopperOptions.map((s) => s.id)));
       return;
     }
+    // Anyone already approved (a real pending invitation) is always
+    // pre-selected — they were ready to send before this checklist even
+    // loaded — on top of the usual top-N fresh AI picks.
+    const pendingIds = shopperOptions.filter((s) => s.pendingInvitationId).map((s) => s.id);
     const required = shops.find((s: any) => s.id === shopId)?.required_shoppers || 0;
-    if (required <= 0) return;
-    setBulkSelected(new Set(shopperOptions.slice(0, required).map((s) => s.id)));
+    const topPicks = required > 0 ? shopperOptions.slice(0, required).map((s) => s.id) : [];
+    setBulkSelected(new Set([...topPicks, ...pendingIds]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recs.data, combinedRecs.data]);
+  }, [recs.data, combinedRecs.data, pendingInvitationsApi.data]);
 
   const selectedShopper = useMemo(
     () => shopperOptions.find((s) => s.id === shopperId),
@@ -880,17 +802,27 @@ export function Outreach() {
     setResult(null);
     setQueuedLocally(false);
     try {
-      const inv = await api.createInvitation({
-        campaign_id: campaignId,
-        shop_id: shopId,
-        shopper_id: shopperId,
-        recipient_email: recipientEmail.trim(),
-        auto_send: false,
-        custom_subject: subject,
-        custom_html: body,
-      });
+      // Already approved (e.g. from AI Recommendations) — reuse that exact
+      // invitation instead of creating a duplicate for the same shopper.
+      const pending = selectedShopper?.pendingInvitationId;
+      const inv = pending
+        ? await api.invitation(pending)
+        : await api.createInvitation({
+            campaign_id: campaignId,
+            shop_id: shopId,
+            shopper_id: shopperId,
+            recipient_email: recipientEmail.trim(),
+            auto_send: false,
+            custom_subject: subject,
+            custom_html: body,
+          });
       setResult(inv);
-      toast(`Invitation ${inv.reference} generated. Preview it, then Send Email.`, "success");
+      toast(
+        pending
+          ? `Invitation ${inv.reference} was already approved. Preview it, then Send Email.`
+          : `Invitation ${inv.reference} generated. Preview it, then Send Email.`,
+        "success"
+      );
     } catch (e: any) {
       toast(e?.message || "Failed to generate invitation", "error");
     } finally {
@@ -1096,10 +1028,6 @@ export function Outreach() {
                 )}
               </div>
 
-              {shopId && (
-                <PendingInvitationsPanel campaignId={campaignId} shopId={shopId} composedSubject={subject} composedBody={body} />
-              )}
-
               <div>
                 <label className="label">
                   Shopper(s) {campaignType === "upcoming" ? "(recommended candidates)" : "(AI recommended)"} —{" "}
@@ -1137,10 +1065,23 @@ export function Outreach() {
                         >
                           <input type="checkbox" checked={bulkSelected.has(s.id)} onChange={() => toggleBulkSelected(s.id)} />
                           <span className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">
-                            {s.shopName ? `${s.name} — for ${s.shopName}` : `${s.name} — ${s.city} (${s.availability_status})`}
+                            {s.shopName
+                              ? `${s.name} — for ${s.shopName}`
+                              : s.city
+                              ? `${s.name} — ${s.city} (${s.availability_status})`
+                              : s.name}
                           </span>
-                          {s.match_score != null && (
-                            <span className="shrink-0 text-xs font-semibold text-brand-600 dark:text-brand-400">{s.match_score}%</span>
+                          {s.pendingInvitationId ? (
+                            <span
+                              className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"
+                              title="Already approved in AI Recommendations — sending reuses this invitation"
+                            >
+                              Approved · {s.pendingReference}
+                            </span>
+                          ) : (
+                            s.match_score != null && (
+                              <span className="shrink-0 text-xs font-semibold text-brand-600 dark:text-brand-400">{s.match_score}%</span>
+                            )
                           )}
                         </label>
                       ))}

@@ -168,6 +168,7 @@ def invitation_row(inv: Invitation) -> dict:
         "id": str(inv.id),
         "reference": inv.reference,
         "tracking_token_masked": mask_token(inv.tracking_token),
+        "shopper_id": str(inv.shopper_id),
         "shopper_name": inv.shopper.name if inv.shopper else None,
         "shopper_email": inv.email,
         "campaign_name": inv.campaign.name if inv.campaign else None,

@@ -788,7 +788,7 @@ function AutoAssignCard({ campaignId }: { campaignId: string }) {
       const byShop = new Map<string, { shopName: string; shopperIds: string[] }>();
       for (const p of proposal.proposals) {
         if (approvedShopIds.has(p.shop_id)) continue;
-        const entry = byShop.get(p.shop_id) || { shopName: p.shop_name, shopperIds: [] };
+        const entry = byShop.get(p.shop_id) || { shopName: p.shop_name, shopperIds: [] as string[] };
         entry.shopperIds.push(p.shopper_id);
         byShop.set(p.shop_id, entry);
       }
