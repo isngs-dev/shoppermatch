@@ -543,9 +543,9 @@ export function ClientVoiceAssistant() {
         </div>
       )}
 
-      {enabled && status !== "off" && (
+      {!showPrompt && (
         <div className="fixed bottom-5 right-5 z-50 flex flex-col items-end gap-2">
-          {expanded && (
+          {expanded && enabled && (
             <div className="w-72 rounded-xl border border-slate-200 bg-white p-3 text-xs shadow-xl dark:border-slate-700 dark:bg-slate-900">
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-slate-700 dark:text-slate-200">Voice Assistant</span>
@@ -584,15 +584,23 @@ export function ClientVoiceAssistant() {
             </div>
           )}
           <button
-            onClick={() => setExpanded((v) => !v)}
-            title={STATUS_LABEL[status]}
+            onClick={() => {
+              if (enabled) {
+                setExpanded((v) => !v);
+              } else {
+                unlockAudio();
+                enableAssistant();
+              }
+            }}
+            title={enabled ? STATUS_LABEL[status] : "Turn on voice assistant"}
             className={classNames(
               "flex h-12 w-12 items-center justify-center rounded-full shadow-lg transition",
-              status === "listening" && "bg-brand-600 text-white",
-              status === "recording" && "animate-pulse bg-rose-600 text-white",
-              status === "thinking" && "bg-amber-500 text-white",
-              status === "speaking" && "bg-emerald-600 text-white",
-              status === "error" && "bg-slate-400 text-white"
+              (!enabled || status === "off") && "bg-slate-300 text-slate-600 hover:bg-slate-400 dark:bg-slate-700 dark:text-slate-300",
+              enabled && status === "listening" && "bg-brand-600 text-white",
+              enabled && status === "recording" && "animate-pulse bg-rose-600 text-white",
+              enabled && status === "thinking" && "bg-amber-500 text-white",
+              enabled && status === "speaking" && "bg-emerald-600 text-white",
+              enabled && status === "error" && "bg-slate-400 text-white"
             )}
           >
             <IconMic width={20} height={20} />
