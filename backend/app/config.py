@@ -145,6 +145,15 @@ class Settings(BaseSettings):
     sms_api_key: str | None = None
     sms_sender: str | None = None
 
+    # ----- Voice Assistant (client portal "Hey" wake-word assistant) -----
+    # Real OpenAI calls (Whisper transcription, GPT tool-calling, TTS) — unlike
+    # `ai_api_key` above, this one is actually wired up and used.
+    openai_api_key: str | None = None
+    openai_chat_model: str = "gpt-4o-mini"
+    openai_whisper_model: str = "whisper-1"
+    openai_tts_model: str = "tts-1"
+    openai_tts_voice: str = "alloy"
+
     @property
     def resolved_database_url(self) -> str:
         # Managed Postgres add-ons (Railway, Render, Heroku, ...) inject a

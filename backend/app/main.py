@@ -38,6 +38,7 @@ from .routers import (
     shoppers,
     shops,
     tracking,
+    voice,
     webhooks,
 )
 from .seed import maybe_seed
@@ -115,6 +116,7 @@ app.include_router(automations.router)
 app.include_router(reports.router)
 app.include_router(admin_users.router)
 app.include_router(misc.router)
+app.include_router(voice.router)
 
 
 @app.get("/api/health", tags=["Meta"])

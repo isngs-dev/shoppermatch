@@ -198,3 +198,10 @@ export const IconHistory = (p: P) => (
     <path d="M3.5 9L2 7.5M3.5 9L5 7.5M3.5 9V5.5" />
   </svg>
 );
+export const IconMic = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="9" y="2" width="6" height="12" rx="3" />
+    <path d="M5 11a7 7 0 0 0 14 0" />
+    <path d="M12 18v4M8 22h8" />
+  </svg>
+);

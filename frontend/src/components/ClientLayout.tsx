@@ -4,6 +4,7 @@ import { classNames } from "../lib/format";
 import { useTheme } from "../lib/theme";
 import { IconLogout, IconMoon, IconSun } from "./Icons";
 import { Avatar, Logo } from "./ui";
+import { ClientVoiceAssistant } from "./ClientVoiceAssistant";
 
 // Shops, Shoppers and Recommendations are deliberately not top-level nav
 // items — they only make sense scoped to one campaign (active/upcoming/
@@ -93,6 +94,8 @@ export function ClientLayout() {
       <main className="mx-auto max-w-7xl p-4 sm:p-6">
         <Outlet />
       </main>
+
+      <ClientVoiceAssistant />
     </div>
   );
 }

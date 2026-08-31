@@ -89,6 +89,36 @@ export async function downloadFile(path: string, filename: string): Promise<void
   URL.revokeObjectURL(url);
 }
 
+// Voice Assistant: multipart audio/transcript upload — auth header only, no
+// Content-Type (the browser sets the multipart boundary itself).
+async function voiceRequest(path: string, form: FormData): Promise<any> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(apiUrl(path), { method: "POST", headers, body: form });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!res.ok) {
+    if (res.status === 401) clearToken();
+    const detail = (data && (data.detail || data.message)) || res.statusText || "Request failed";
+    throw new ApiError(res.status, typeof detail === "string" ? detail : "Request failed", data);
+  }
+  return data;
+}
+
+// Voice Assistant: text -> spoken audio (mp3 blob), for local <audio> playback.
+async function voiceSpeakRequest(text: string): Promise<Blob> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(apiUrl("/api/voice/speak"), { method: "POST", headers, body: JSON.stringify({ text }) });
+  if (!res.ok) {
+    if (res.status === 401) clearToken();
+    throw new ApiError(res.status, "Speech synthesis failed");
+  }
+  return res.blob();
+}
+
 function qs(params: Record<string, any> = {}): string {
   const entries = Object.entries(params).filter(
     ([, v]) => v !== undefined && v !== null && v !== ""
@@ -316,4 +346,15 @@ export const api = {
   clientEmailStatus: () => request("/api/client/email-status"),
   clientTracking: () => request("/api/client/tracking"),
   clientTrackingCampaign: (campaignId: string) => request(`/api/client/tracking/campaign/${campaignId}`),
+
+  // ---- Voice Assistant ----
+  voiceStatus: () => request("/api/voice/status"),
+  voiceCommand: (opts: { audioBlob?: Blob; transcript?: string; context: Record<string, any> }) => {
+    const form = new FormData();
+    if (opts.audioBlob) form.append("audio", opts.audioBlob, "clip.webm");
+    if (opts.transcript) form.append("transcript", opts.transcript);
+    form.append("context", JSON.stringify(opts.context));
+    return voiceRequest("/api/voice/command", form);
+  },
+  voiceSpeak: (text: string) => voiceSpeakRequest(text),
 };
