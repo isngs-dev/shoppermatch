@@ -589,6 +589,9 @@ export function ClientVoiceAssistant() {
                 setExpanded((v) => !v);
               } else {
                 unlockAudio();
+                setExpanded(true); // show the status line immediately — if mic access
+                // fails or the browser can't do this, that's visible right away as
+                // "Voice assistant unavailable" instead of a subtle color change.
                 enableAssistant();
               }
             }}
