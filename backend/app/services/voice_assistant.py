@@ -46,7 +46,15 @@ TOOLS: list[dict[str, Any]] = [
                             "reports",
                             "profile",
                         ],
-                    }
+                    },
+                    "campaign_filter": {
+                        "type": "string",
+                        "enum": ["active", "upcoming", "completed"],
+                        "description": (
+                            "Only meaningful when page is 'campaigns' — which tab to open. "
+                            "Omit for the default (active)."
+                        ),
+                    },
                 },
                 "required": ["page"],
             },
@@ -128,7 +136,9 @@ Rules:
 - If the client is asking a question answerable from the provided context \
   (a stat, a count, campaign status, etc.), just answer in one or two short \
   spoken sentences — no tool call needed.
-- If they want to go somewhere, call `navigate`.
+- If they want to go somewhere, call `navigate`. If they mention active, \
+  upcoming, or completed campaigns specifically (e.g. "show my upcoming \
+  campaigns"), set `campaign_filter` accordingly on the campaigns page.
 - If they want invitations/emails sent for a campaign, call \
   `propose_send_invitations` first and ask them to confirm out loud — only \
   call `send_campaign_invitations` on a clear follow-up confirmation.
@@ -198,7 +208,11 @@ async def run_agent(transcript: str, context: dict[str, Any]) -> dict[str, Any]:
 
 def _default_reply_for(name: str, arguments: dict[str, Any]) -> str:
     if name == "navigate":
-        return f"Opening {arguments.get('page', 'that page')}."
+        page = arguments.get("page", "that page")
+        campaign_filter = arguments.get("campaign_filter")
+        if page == "campaigns" and campaign_filter:
+            return f"Opening your {campaign_filter} campaigns."
+        return f"Opening {page}."
     if name == "propose_send_invitations":
         campaign = arguments.get("campaign_name", "this campaign")
         return f"I'll auto-assign and email AI-recommended shoppers across {campaign}. Say confirm to go ahead."

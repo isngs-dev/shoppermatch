@@ -227,7 +227,11 @@ export function ClientVoiceAssistant() {
       }
       switch (action.name) {
         case "navigate": {
-          const path = PAGE_PATHS[action.arguments?.page];
+          const page = action.arguments?.page;
+          let path = PAGE_PATHS[page];
+          if (path && page === "campaigns" && action.arguments?.campaign_filter) {
+            path = `${path}/${action.arguments.campaign_filter}`;
+          }
           if (path) navigate(path);
           await speak(replyText);
           return;
