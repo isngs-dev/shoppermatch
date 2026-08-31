@@ -1161,10 +1161,28 @@ function DistributionTab({ campaignId, campaignName }: { campaignId: string; cam
   const toast = useToast();
   const { data, loading, error, reload } = useApi(() => api.campaignDistribution(campaignId), [campaignId]);
   const [message, setMessage] = useState(`Now recruiting mystery shoppers for ${campaignName}! Apply today.`);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [generatingImage, setGeneratingImage] = useState(false);
   const [posting, setPosting] = useState(false);
 
   if (loading && !data) return <Loading label="Loading distribution…" />;
   if (error) return <ErrorBox message={error} onRetry={reload} />;
+
+  async function generateImage() {
+    if (!message.trim()) {
+      toast("Write the campaign creative first.", "error");
+      return;
+    }
+    setGeneratingImage(true);
+    try {
+      const res = await api.generateDistributionImage(campaignId, message.trim());
+      setImageUrl(res.image_url);
+    } catch (e: any) {
+      toast(e?.message || "Failed to generate image", "error");
+    } finally {
+      setGeneratingImage(false);
+    }
+  }
 
   async function postToAll() {
     if (!message.trim()) {
@@ -1173,7 +1191,7 @@ function DistributionTab({ campaignId, campaignName }: { campaignId: string; cam
     }
     setPosting(true);
     try {
-      const res = await api.postCampaignDistribution(campaignId, message.trim());
+      const res = await api.postCampaignDistribution(campaignId, message.trim(), imageUrl);
       toast(`Posted to ${res.count} regional destination(s).`, "success");
       reload();
     } catch (e: any) {
@@ -1187,25 +1205,61 @@ function DistributionTab({ campaignId, campaignName }: { campaignId: string; cam
     <div className="space-y-6">
       <div className="card border border-amber-200 p-4 text-xs text-amber-700 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300">
         <span className="font-semibold">SIMULATED</span> — this demonstrates region-matched posting using this
-        campaign's real shop locations. No live Facebook, JobSlinger, or TrustedHerd connection exists; nothing is
-        actually posted externally.
+        campaign's real shop locations, with a real AI-generated graphic. No live Facebook, JobSlinger, or
+        TrustedHerd connection exists; nothing is actually posted externally.
       </div>
 
-      <div className="card p-5">
-        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Campaign creative</h2>
-        <p className="mt-1 text-xs text-slate-400">
-          The same message is sent to every region-matched destination below — targeting changes which pages/portals
-          receive it, not the content itself.
-        </p>
-        <textarea
-          className="input mt-3 h-24 w-full resize-none"
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-        />
-        <div className="mt-3 flex justify-end">
-          <button className="btn-primary" onClick={postToAll} disabled={posting}>
-            {posting ? <Spinner /> : null} Post to All Regions
-          </button>
+      <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
+        <div className="card p-5">
+          <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Campaign creative</h2>
+          <p className="mt-1 text-xs text-slate-400">
+            The same message and image are sent to every region-matched destination below — targeting changes which
+            pages/portals receive it, not the content itself.
+          </p>
+          <textarea
+            className="input mt-3 h-24 w-full resize-none"
+            value={message}
+            onChange={(e) => {
+              setMessage(e.target.value);
+              setImageUrl(null); // stale image wouldn't match new copy — regenerate deliberately
+            }}
+          />
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            <button className="btn-secondary" onClick={generateImage} disabled={generatingImage}>
+              {generatingImage ? <Spinner /> : "✨"} {imageUrl ? "Regenerate Image" : "Generate Image"}
+            </button>
+            <button className="btn-primary" onClick={postToAll} disabled={posting}>
+              {posting ? <Spinner /> : null} Post to All Regions
+            </button>
+          </div>
+        </div>
+
+        {/* Social-post-style preview — image on top, caption below, like a
+            real generated post rather than plain text. */}
+        <div className="card mx-auto w-full max-w-xs overflow-hidden p-0">
+          <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2.5 dark:border-slate-800">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-600 text-xs font-bold text-white">
+              {campaignName.slice(0, 1)}
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-xs font-semibold text-slate-800 dark:text-slate-100">{campaignName}</div>
+              <div className="text-[10px] text-slate-400">Sponsored · Mystery Shopper Recruitment</div>
+            </div>
+          </div>
+          <div className="flex aspect-square w-full items-center justify-center bg-slate-50 dark:bg-slate-800/60">
+            {generatingImage ? (
+              <div className="flex flex-col items-center gap-2 text-xs text-slate-400">
+                <Spinner /> Generating graphic…
+              </div>
+            ) : imageUrl ? (
+              <img src={imageUrl} alt="Generated post creative" className="h-full w-full object-cover" />
+            ) : (
+              <div className="px-4 text-center text-xs text-slate-400">
+                No image yet — click "Generate Image" to create one with AI.
+              </div>
+            )}
+          </div>
+          <div className="whitespace-pre-wrap p-3 text-xs text-slate-700 dark:text-slate-200">{message}</div>
         </div>
       </div>
 
@@ -1263,6 +1317,7 @@ function DistributionTab({ campaignId, campaignName }: { campaignId: string; cam
           <table className="min-w-full">
             <thead className="border-b border-slate-100 dark:border-slate-800">
               <tr>
+                <th className="th"></th>
                 <th className="th">Region</th>
                 <th className="th">Destination</th>
                 <th className="th">Posted</th>
@@ -1272,6 +1327,13 @@ function DistributionTab({ campaignId, campaignName }: { campaignId: string; cam
             <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
               {data.recent_posts.map((p: any) => (
                 <tr key={p.id}>
+                  <td className="td">
+                    {p.image_url ? (
+                      <img src={p.image_url} alt="" className="h-8 w-8 rounded object-cover" />
+                    ) : (
+                      <div className="h-8 w-8 rounded bg-slate-100 dark:bg-slate-800" />
+                    )}
+                  </td>
                   <td className="td">{p.region}</td>
                   <td className="td">
                     {DESTINATION_ICON[p.destination_type] || "🌐"} {p.destination_name}

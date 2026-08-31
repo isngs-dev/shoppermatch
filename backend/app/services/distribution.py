@@ -16,6 +16,9 @@ recorded (DistributionPost), never silently claimed as a live connection.
 """
 from __future__ import annotations
 
+from fastapi import HTTPException
+
+from ..config import settings
 from ..models import Shop
 
 # Whether JobSlinger and TrustedHerd actually support posting scoped to a
@@ -55,3 +58,45 @@ def regions_for_shops(shops: list[Shop]) -> dict[str, list[Shop]]:
         region = region_for_shop(shop)
         grouped.setdefault(region, []).append(shop)
     return grouped
+
+
+async def generate_post_image(campaign_name: str, message: str) -> str:
+    """The one genuinely-real AI call in this feature: DALL-E generates an
+    actual promotional graphic for the post (the "same one-click posting
+    automation" from the source doc still applies to the *posting* step —
+    this just gives it real creative to post instead of text-only). Returns
+    a temporary OpenAI-hosted image URL — the same kind Outreach/Email
+    Automation already link out to for assignment/tracking, nothing new
+    architecturally.
+
+    Deliberately does NOT ask the model to render the campaign's own body
+    copy as in-image text — image models are unreliable at legible text
+    rendering, so the caption stays a separate, always-legible layer the
+    frontend overlays underneath the image, the way a real social post
+    (image + separate caption) actually works."""
+    import httpx
+
+    if not settings.openai_api_key:
+        raise HTTPException(status_code=503, detail="Image generation is not configured (missing OPENAI_API_KEY).")
+
+    prompt = (
+        f"A vibrant, professional social media promotional graphic recruiting mystery shoppers for the "
+        f'"{campaign_name}" campaign. Theme/mood drawn from: "{message}". Bright, eye-catching, modern retail '
+        f"marketing style, no readable text or letters in the image, wide banner composition."
+    )
+    async with httpx.AsyncClient(timeout=60) as client:
+        res = await client.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            json={"model": settings.openai_image_model, "prompt": prompt, "size": "1024x1024", "n": 1},
+        )
+    if res.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Image generation failed: {res.text[:300]}")
+    data = res.json()["data"][0]
+    url = data.get("url")
+    if not url:
+        b64 = data.get("b64_json")
+        if not b64:
+            raise HTTPException(status_code=502, detail="Image generation returned no image")
+        url = f"data:image/png;base64,{b64}"
+    return url

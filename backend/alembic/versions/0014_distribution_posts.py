@@ -27,6 +27,7 @@ def upgrade() -> None:
         sa.Column("destination_type", sa.String(60), nullable=False),
         sa.Column("destination_name", sa.String(255), nullable=False),
         sa.Column("message", sa.Text(), nullable=False),
+        sa.Column("image_url", sa.Text(), nullable=True),
         sa.Column("status", sa.String(30), nullable=False, server_default="posted"),
         sa.Column("posted_by", sa.String(255), nullable=False),
         sa.Column("posted_at", sa.DateTime(timezone=True), nullable=False),

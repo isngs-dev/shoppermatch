@@ -153,6 +153,9 @@ class Settings(BaseSettings):
     openai_whisper_model: str = "whisper-1"
     openai_tts_model: str = "tts-1"
     openai_tts_voice: str = "alloy"
+    # Used by Region-Targeted Social Media Posting to generate the post
+    # graphic — same key as everything else above, one more OpenAI capability.
+    openai_image_model: str = "gpt-image-1"
 
     @property
     def resolved_database_url(self) -> str:

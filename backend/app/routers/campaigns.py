@@ -21,7 +21,7 @@ from ..deps import require_operator
 from ..models import Campaign, DistributionPost, EventType, Invitation, Shop, Shopper, User
 from ..serializers import campaign_out, invitation_row, iso, shop_out, shopper_out
 from ..services.audit import record_audit
-from ..services.distribution import DESTINATION_TYPES, destination_name, regions_for_shops
+from ..services.distribution import DESTINATION_TYPES, destination_name, generate_post_image, regions_for_shops
 from ..services.selection import enforce_over_selection
 from ..services.semantic_matching import MATCHING_WEIGHTS, run_matching
 from ..services.tenancy import enforce_campaign_access
@@ -572,6 +572,7 @@ async def get_distribution(
                     "last_post": (
                         {
                             "message": last.message,
+                            "image_url": last.image_url,
                             "posted_at": iso(last.posted_at),
                             "posted_by": last.posted_by,
                             "status": last.status,
@@ -597,6 +598,7 @@ async def get_distribution(
             "destination_type": p.destination_type,
             "destination_name": p.destination_name,
             "message": p.message,
+            "image_url": p.image_url,
             "posted_at": iso(p.posted_at),
             "posted_by": p.posted_by,
             "status": p.status,
@@ -606,8 +608,28 @@ async def get_distribution(
     return {"campaign_id": str(campaign_id), "regions": regions_out, "recent_posts": recent}
 
 
+class DistributionImageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+
+
+@router.post("/{campaign_id}/distribution/generate-image")
+async def generate_distribution_image(
+    campaign_id: uuid.UUID,
+    body: DistributionImageRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    """The one real AI call in this feature — see
+    services/distribution.py::generate_post_image. Returns the image only;
+    it isn't saved anywhere until the client actually posts with it."""
+    campaign = await _require_campaign(session, campaign_id, user)
+    image_url = await generate_post_image(campaign.name, body.message)
+    return {"image_url": image_url}
+
+
 class DistributionPostRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
+    image_url: str | None = None
     # Omit to post to every region-matched destination for this campaign.
     regions: list[str] | None = None
 
@@ -644,6 +666,7 @@ async def post_distribution(
                 destination_type=dtype,
                 destination_name=destination_name(dtype, region),
                 message=body.message,
+                image_url=body.image_url,
                 status="posted",
                 posted_by=user.email,
             )

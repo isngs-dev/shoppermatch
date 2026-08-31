@@ -619,6 +619,11 @@ class DistributionPost(Base):
     destination_type: Mapped[str] = mapped_column(String(60))  # facebook | jobslinger | trustedherd
     destination_name: Mapped[str] = mapped_column(String(255))
     message: Mapped[str] = mapped_column(Text)
+    # AI-generated (DALL-E) promotional graphic for this post — an OpenAI-
+    # hosted URL (or a data: URI if the API returned base64 instead), same
+    # "temporary external link" shape as other generated-content URLs
+    # elsewhere in the app. Nullable: an older/text-only post has none.
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="posted")
     posted_by: Mapped[str] = mapped_column(String(255))
     posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

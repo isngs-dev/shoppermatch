@@ -165,8 +165,13 @@ export const api = {
   campaignTracking: (id: string) => request(`/api/campaigns/${id}/tracking`),
   campaignInsights: (id: string) => request(`/api/campaigns/${id}/insights`),
   campaignDistribution: (id: string) => request(`/api/campaigns/${id}/distribution`),
-  postCampaignDistribution: (id: string, message: string, regions?: string[]) =>
-    request(`/api/campaigns/${id}/distribution/post`, { method: "POST", body: { message, regions } }),
+  generateDistributionImage: (id: string, message: string) =>
+    request(`/api/campaigns/${id}/distribution/generate-image`, { method: "POST", body: { message } }),
+  postCampaignDistribution: (id: string, message: string, imageUrl?: string | null, regions?: string[]) =>
+    request(`/api/campaigns/${id}/distribution/post`, {
+      method: "POST",
+      body: { message, image_url: imageUrl ?? null, regions },
+    }),
   aiShopRecommendations: (campaignId: string, shopId: string, params?: Record<string, any>) =>
     request(`/api/campaigns/${campaignId}/shops/${shopId}/recommendations` + qs(params)),
   approveAiRecommendations: (campaignId: string, shopId: string, shopperIds: string[]) =>
