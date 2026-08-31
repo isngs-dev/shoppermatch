@@ -37,6 +37,19 @@ const CANCEL_WORDS = /\b(no|nope|cancel|never ?mind|stop)\b/i;
 const WAKE_WORD = /\bhey\b/i;
 const COMMAND_MS = 4500; // recording window after the wake word fires
 
+// Shortest possible valid WAV file (a handful of silent samples) — played
+// once, synchronously inside a real click handler, purely to satisfy
+// Chrome's autoplay policy. Browsers block HTMLMediaElement.play() unless
+// it's tied to a recent user gesture; by the time a spoken reply is ready
+// (record -> transcribe -> reason -> synthesize takes several seconds),
+// the original "Enable" click no longer counts as "recent" — so without
+// this, every reply's audio would play() and silently fail. A play() that
+// DOES succeed inside the click itself "unlocks" that Audio element for
+// programmatic playback for the rest of this page session, even later
+// outside a gesture.
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+
 type Status = "off" | "listening" | "recording" | "thinking" | "speaking" | "error";
 
 const PAGE_PATHS: Record<string, string> = {
@@ -449,7 +462,25 @@ export function ClientVoiceAssistant() {
     setStatus("off");
   }
 
+  // Must run synchronously inside a real click handler — see SILENT_WAV.
+  function unlockAudio() {
+    try {
+      if (!audioElRef.current) audioElRef.current = new Audio();
+      const el = audioElRef.current;
+      el.src = SILENT_WAV;
+      const p = el.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => el.pause()).catch(() => {
+          /* even a failed unlock attempt shouldn't block enabling */
+        });
+      }
+    } catch {
+      /* best effort — worst case, replies fall back to text-only */
+    }
+  }
+
   async function enableAssistant() {
+    unlockAudio();
     setShowPrompt(false);
     setEnabled(true);
     localStorage.setItem(ENABLED_KEY, "true");
@@ -460,6 +491,24 @@ export function ClientVoiceAssistant() {
     setShowPrompt(false);
     localStorage.setItem(ENABLED_KEY, "false");
   }
+
+  // Covers the "already enabled from a previous browser session" case: on a
+  // fresh page load the assistant auto-starts listening with no click at
+  // all, so there's no gesture to hook the unlock into at that moment. This
+  // piggybacks on the client's very next ordinary click anywhere on the
+  // page (a nav link, a button — anything) to unlock audio before they ever
+  // say "Hey", which in practice happens well before their first voice
+  // command. Removes itself after firing once.
+  useEffect(() => {
+    if (!enabled) return;
+    function onFirstClick() {
+      unlockAudio();
+      window.removeEventListener("click", onFirstClick);
+    }
+    window.addEventListener("click", onFirstClick);
+    return () => window.removeEventListener("click", onFirstClick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]);
 
   if (!available) return null;
 
