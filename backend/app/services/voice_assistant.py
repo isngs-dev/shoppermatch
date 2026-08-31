@@ -37,7 +37,11 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "navigate",
-            "description": "Go to a different page in the client portal.",
+            "description": (
+                "Go to a different page in the client portal. Use page='campaign_detail' to open ONE "
+                "specific campaign's page directly (e.g. 'take me to the distribution tab for Nike Mumbai "
+                "Store Audit', 'open the outreach tab for that campaign') — set campaign_name and detail_tab."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -51,6 +55,7 @@ TOOLS: list[dict[str, Any]] = [
                             "insights",
                             "reports",
                             "profile",
+                            "campaign_detail",
                         ],
                     },
                     "campaign_filter": {
@@ -60,6 +65,25 @@ TOOLS: list[dict[str, Any]] = [
                             "Only meaningful when page is 'campaigns' — which tab to open. "
                             "Omit for the default (active)."
                         ),
+                    },
+                    "campaign_name": {
+                        "type": "string",
+                        "description": "Only meaningful when page is 'campaign_detail' — which campaign to open.",
+                    },
+                    "detail_tab": {
+                        "type": "string",
+                        "enum": [
+                            "overview",
+                            "map",
+                            "shops",
+                            "shoppers",
+                            "recommendations",
+                            "outreach",
+                            "distribution",
+                            "tracking",
+                            "insights",
+                        ],
+                        "description": "Only meaningful when page is 'campaign_detail'. Omit for the overview tab.",
                     },
                 },
                 "required": ["page"],
@@ -106,6 +130,63 @@ TOOLS: list[dict[str, Any]] = [
                 "conversation."
             ),
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "draft_distribution_post",
+            "description": (
+                "Write or revise the social/portal post creative (caption text) for a named "
+                "campaign's Region-Targeted Social Media Posting (the Distribution tab) — e.g. "
+                "'write a post for Nike Mumbai Store Audit', 'make that post punchier'. If revising "
+                "a draft from earlier in this conversation, return the full updated text. This is "
+                "text only — no image is generated at this step (that happens right before "
+                "posting, via post_distribution, so nothing is generated for a draft that gets "
+                "discarded)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "campaign_name": {"type": "string"},
+                    "message": {"type": "string"},
+                },
+                "required": ["campaign_name", "message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_post_distribution",
+            "description": (
+                "First step of actually publishing a distribution post — asks the client to "
+                "confirm out loud before anything is generated/posted. Always call this before "
+                "post_distribution. Requires a draft_distribution_post to already exist in this "
+                "conversation for the same campaign."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"campaign_name": {"type": "string"}},
+                "required": ["campaign_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "post_distribution",
+            "description": (
+                "Generates the post graphic and publishes the most recently drafted distribution "
+                "post to every one of the client's connected accounts region-matched to this "
+                "campaign's shops. Only call this once the client has clearly confirmed after "
+                "propose_post_distribution."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"campaign_name": {"type": "string"}},
+                "required": ["campaign_name"],
+            },
         },
     },
     {
@@ -236,6 +317,13 @@ Rules:
   propose_start_automation -> start_campaign_automation. Always propose \
   first and require a clear spoken/typed confirmation before the actual \
   send tool.
+- Region-Targeted Social Media Posting (the Distribution tab — posting a \
+  campaign's creative to region-matched Facebook/Instagram/LinkedIn/Twitter/ \
+  JobSlinger/TrustedHerd accounts): writing/revising the post's caption text \
+  goes through `draft_distribution_post` (MUST call this tool, never write \
+  the caption directly in your reply). Actually publishing it goes through \
+  propose_post_distribution -> post_distribution, same propose-then-confirm \
+  pattern as every other send in this app.
 - If they want to stop the assistant, call `disable_assistant`.
 - Keep replies short — one or two sentences — EXCEPT when returning an email \
   draft, where the full subject/body belongs in the tool arguments.
@@ -321,6 +409,10 @@ def _default_reply_for(name: str, arguments: dict[str, Any]) -> str:
         campaign_filter = arguments.get("campaign_filter")
         if page == "campaigns" and campaign_filter:
             return f"Opening your {campaign_filter} campaigns."
+        if page == "campaign_detail":
+            campaign = arguments.get("campaign_name", "that campaign")
+            tab = arguments.get("detail_tab")
+            return f"Opening the {tab} tab for {campaign}." if tab else f"Opening {campaign}."
         return f"Opening {page}."
     if name == "reload_page":
         return "Reloading the page."
@@ -328,6 +420,13 @@ def _default_reply_for(name: str, arguments: dict[str, Any]) -> str:
         return "Here's a draft — check the chat. Say \"edit it\" with changes, or \"use this in outreach\" to apply it."
     if name == "apply_draft_to_outreach":
         return "Applied to the Outreach compose box."
+    if name == "draft_distribution_post":
+        return "Here's a draft post — check the chat. Say \"post it\" when you're ready, or ask me to revise it."
+    if name == "propose_post_distribution":
+        campaign = arguments.get("campaign_name", "this campaign")
+        return f"I'll generate a graphic and post that to your connected accounts for {campaign}. Say confirm to go ahead."
+    if name == "post_distribution":
+        return f"Posting for {arguments.get('campaign_name', 'the campaign')} now."
     if name == "propose_send_invitations":
         campaign = arguments.get("campaign_name", "this campaign")
         return f"I'll auto-assign and email AI-recommended shoppers across {campaign}. Say confirm to go ahead."
@@ -352,6 +451,10 @@ def _history_text_for(name: str, arguments: dict[str, Any], reply_text: str) -> 
         subject = arguments.get("subject", "")
         body = arguments.get("body", "")
         return f"Drafted email:\nSubject: {subject}\n\n{body}"
+    if name == "draft_distribution_post":
+        campaign = arguments.get("campaign_name", "")
+        message = arguments.get("message", "")
+        return f"Drafted distribution post for {campaign}:\n{message}"
     return reply_text
 
 

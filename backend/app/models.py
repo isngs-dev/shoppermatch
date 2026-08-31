@@ -631,6 +631,29 @@ class DistributionPost(Base):
     campaign: Mapped["Campaign"] = relationship()
 
 
+# --------------------------------------------------------------------------- #
+# Connected social/portal accounts (conceptual/demo — see
+# services/distribution.py). Client-level, not campaign-scoped: connecting
+# a platform once makes it available for Distribution posts across every
+# campaign that client owns. There is no real OAuth handshake — "Connect"
+# creates this row directly, same simulated pattern as the rest of this
+# feature; it exists so posting only ever offers platforms the client has
+# explicitly said they want to use, not a fixed hardcoded set.
+# --------------------------------------------------------------------------- #
+class ClientSocialAccount(Base):
+    __tablename__ = "client_social_accounts"
+    __table_args__ = (UniqueConstraint("client_id", "platform", name="uq_client_social_account_platform"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"), index=True)
+    platform: Mapped[str] = mapped_column(String(30))  # facebook|instagram|linkedin|twitter|jobslinger|trustedherd
+    account_name: Mapped[str] = mapped_column(String(255))
+    connected_by: Mapped[str] = mapped_column(String(255))
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    client: Mapped["Client"] = relationship()
+
+
 # Event type + status constants (kept in one place for reuse across the app).
 class EventType:
     INVITATION_CREATED = "invitation_created"

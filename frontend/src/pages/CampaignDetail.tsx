@@ -1153,20 +1153,116 @@ function OutreachTab({ campaignId, bucket }: { campaignId: string; bucket: strin
 // against this campaign's actual shop city/state data.
 const DESTINATION_ICON: Record<string, string> = {
   facebook: "📘",
-  jobslinger: "💼",
+  instagram: "📸",
+  linkedin: "💼",
+  twitter: "🐦",
+  jobslinger: "🧰",
   trustedherd: "🤝",
 };
+
+// ---- Connected Accounts — client-level (shared across every campaign this
+// client owns), so it lives inline at the top of Distribution rather than a
+// separate settings page. "Connect" is a demo simulation — no real OAuth. ---- //
+function ConnectedAccountsPanel({
+  accounts,
+  onChange,
+}: {
+  accounts: any[];
+  onChange: () => void;
+}) {
+  const toast = useToast();
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function toggle(platform: string, connected: boolean) {
+    setBusy(platform);
+    try {
+      if (connected) {
+        await api.disconnectSocialAccount(platform);
+        toast(`Disconnected ${platform}.`, "success");
+      } else {
+        const res = await api.connectSocialAccount(platform);
+        toast(`Connected ${res.account_name}.`, "success");
+      }
+      onChange();
+    } catch (e: any) {
+      toast(e?.message || "Failed", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="card p-5">
+      <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Connected accounts</h2>
+      <p className="mt-1 text-xs text-slate-400">
+        Connect the platforms you want to post to — posting only ever offers accounts you've explicitly connected
+        here. (Demo: no real login/OAuth happens.)
+      </p>
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {accounts.map((a: any) => (
+          <div
+            key={a.platform}
+            className={classNames(
+              "flex flex-col gap-1.5 rounded-lg border p-2.5 text-xs",
+              a.connected
+                ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30"
+                : "border-slate-200 dark:border-slate-700"
+            )}
+          >
+            <div className="flex items-center gap-1.5 font-medium text-slate-700 dark:text-slate-200">
+              <span>{DESTINATION_ICON[a.platform] || "🌐"}</span> {a.label}
+            </div>
+            {a.connected && (
+              <div className="truncate text-[10px] text-slate-400" title={a.account_name}>
+                {a.account_name}
+              </div>
+            )}
+            <button
+              className={classNames(
+                "mt-0.5 self-start rounded-md px-2 py-1 text-[11px] font-semibold",
+                a.connected
+                  ? "text-rose-600 hover:underline dark:text-rose-400"
+                  : "bg-brand-600 text-white hover:bg-brand-700"
+              )}
+              onClick={() => toggle(a.platform, a.connected)}
+              disabled={busy === a.platform}
+            >
+              {busy === a.platform ? <Spinner /> : a.connected ? "Disconnect" : "Connect"}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function DistributionTab({ campaignId, campaignName }: { campaignId: string; campaignName: string }) {
   const toast = useToast();
   const { data, loading, error, reload } = useApi(() => api.campaignDistribution(campaignId), [campaignId]);
+  const accountsApi = useApi(() => api.clientSocialAccounts());
   const [message, setMessage] = useState(`Now recruiting mystery shoppers for ${campaignName}! Apply today.`);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [generatingImage, setGeneratingImage] = useState(false);
   const [posting, setPosting] = useState(false);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string> | null>(null);
 
-  if (loading && !data) return <Loading label="Loading distribution…" />;
+  const connectedAccounts = (accountsApi.data?.items || []).filter((a: any) => a.connected);
+  // Defaults to "every connected platform" the first time accounts load,
+  // but only overrides that default once — after that, whatever the client
+  // has manually checked/unchecked wins, even if they connect another
+  // platform mid-session.
+  const effectiveSelected =
+    selectedPlatforms ?? new Set(connectedAccounts.map((a: any) => a.platform));
+
+  if ((loading && !data) || (accountsApi.loading && !accountsApi.data)) return <Loading label="Loading distribution…" />;
   if (error) return <ErrorBox message={error} onRetry={reload} />;
+
+  function togglePlatform(platform: string) {
+    const next = new Set(effectiveSelected);
+    if (next.has(platform)) next.delete(platform);
+    else next.add(platform);
+    setSelectedPlatforms(next);
+  }
 
   async function generateImage() {
     if (!message.trim()) {
@@ -1189,9 +1285,13 @@ function DistributionTab({ campaignId, campaignName }: { campaignId: string; cam
       toast("Write the campaign creative first.", "error");
       return;
     }
+    if (effectiveSelected.size === 0) {
+      toast("Select at least one connected platform to post to.", "error");
+      return;
+    }
     setPosting(true);
     try {
-      const res = await api.postCampaignDistribution(campaignId, message.trim(), imageUrl);
+      const res = await api.postCampaignDistribution(campaignId, message.trim(), imageUrl, Array.from(effectiveSelected));
       toast(`Posted to ${res.count} regional destination(s).`, "success");
       reload();
     } catch (e: any) {
@@ -1209,6 +1309,8 @@ function DistributionTab({ campaignId, campaignName }: { campaignId: string; cam
         TrustedHerd connection exists; nothing is actually posted externally.
       </div>
 
+      <ConnectedAccountsPanel accounts={accountsApi.data?.items || []} onChange={accountsApi.reload} />
+
       <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
         <div className="card p-5">
           <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Campaign creative</h2>
@@ -1224,12 +1326,38 @@ function DistributionTab({ campaignId, campaignName }: { campaignId: string; cam
               setImageUrl(null); // stale image wouldn't match new copy — regenerate deliberately
             }}
           />
+
+          {!connectedAccounts.length ? (
+            <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">
+              Connect at least one account above before posting.
+            </p>
+          ) : (
+            <div className="mt-3">
+              <div className="label">Post to</div>
+              <div className="flex flex-wrap gap-2">
+                {connectedAccounts.map((a: any) => (
+                  <label
+                    key={a.platform}
+                    className="flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 px-2.5 py-1 text-xs dark:border-slate-700"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={effectiveSelected.has(a.platform)}
+                      onChange={() => togglePlatform(a.platform)}
+                    />
+                    {DESTINATION_ICON[a.platform] || "🌐"} {a.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="mt-3 flex flex-wrap justify-end gap-2">
             <button className="btn-secondary" onClick={generateImage} disabled={generatingImage}>
               {generatingImage ? <Spinner /> : "✨"} {imageUrl ? "Regenerate Image" : "Generate Image"}
             </button>
-            <button className="btn-primary" onClick={postToAll} disabled={posting}>
-              {posting ? <Spinner /> : null} Post to All Regions
+            <button className="btn-primary" onClick={postToAll} disabled={posting || !connectedAccounts.length}>
+              {posting ? <Spinner /> : null} Post to Selected Platforms
             </button>
           </div>
         </div>
@@ -1284,7 +1412,10 @@ function DistributionTab({ campaignId, campaignName }: { campaignId: string; cam
                 {r.destinations.map((d: any) => (
                   <div
                     key={d.type}
-                    className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-xs dark:border-slate-800"
+                    className={classNames(
+                      "flex items-center justify-between rounded-lg border px-3 py-2 text-xs",
+                      d.connected ? "border-slate-100 dark:border-slate-800" : "border-dashed border-slate-200 opacity-60 dark:border-slate-700"
+                    )}
                   >
                     <div className="flex min-w-0 items-center gap-2">
                       <span>{DESTINATION_ICON[d.type] || "🌐"}</span>
@@ -1292,7 +1423,11 @@ function DistributionTab({ campaignId, campaignName }: { campaignId: string; cam
                         {d.name}
                       </span>
                     </div>
-                    {d.last_post ? (
+                    {!d.connected ? (
+                      <Badge className="shrink-0 bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500">
+                        Not connected
+                      </Badge>
+                    ) : d.last_post ? (
                       <Badge className="shrink-0 bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
                         Posted {fmtDate(d.last_post.posted_at)}
                       </Badge>

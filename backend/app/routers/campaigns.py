@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from ..database import get_session
 from ..deps import require_operator
-from ..models import Campaign, DistributionPost, EventType, Invitation, Shop, Shopper, User
+from ..models import Campaign, ClientSocialAccount, DistributionPost, EventType, Invitation, Shop, Shopper, User
 from ..serializers import campaign_out, invitation_row, iso, shop_out, shopper_out
 from ..services.audit import record_audit
 from ..services.distribution import DESTINATION_TYPES, destination_name, generate_post_image, regions_for_shops
@@ -547,6 +547,13 @@ async def get_distribution(
     shops = await campaign.awaitable_attrs.shops
     grouped = regions_for_shops(list(shops))
 
+    # Scoped to the CAMPAIGN's owning client, not the requesting user — an
+    # admin viewing this on a client's behalf should see that client's
+    # connected accounts, not their own (admins have no client_id at all).
+    accounts_stmt = select(ClientSocialAccount).where(ClientSocialAccount.client_id == campaign.client_id)
+    connected_accounts = (await session.execute(accounts_stmt)).scalars().all()
+    connected_platforms = {a.platform for a in connected_accounts}
+
     last_posts_stmt = (
         select(DistributionPost)
         .where(DistributionPost.campaign_id == campaign_id)
@@ -569,6 +576,7 @@ async def get_distribution(
                     "type": dtype,
                     "label": dlabel,
                     "name": destination_name(dtype, region),
+                    "connected": dtype in connected_platforms,
                     "last_post": (
                         {
                             "message": last.message,
@@ -605,7 +613,16 @@ async def get_distribution(
         }
         for p in all_posts[:20]
     ]
-    return {"campaign_id": str(campaign_id), "regions": regions_out, "recent_posts": recent}
+    connected_out = [
+        {"platform": a.platform, "account_name": a.account_name, "connected_at": iso(a.connected_at)}
+        for a in connected_accounts
+    ]
+    return {
+        "campaign_id": str(campaign_id),
+        "regions": regions_out,
+        "recent_posts": recent,
+        "connected_accounts": connected_out,
+    }
 
 
 class DistributionImageRequest(BaseModel):
@@ -632,6 +649,11 @@ class DistributionPostRequest(BaseModel):
     image_url: str | None = None
     # Omit to post to every region-matched destination for this campaign.
     regions: list[str] | None = None
+    # Omit to post to every platform the client has connected. Posting to a
+    # platform that isn't connected is rejected — connecting it is the
+    # client's explicit signal they want to use it (see /api/client/social-
+    # accounts), not something a post request can silently opt into.
+    platforms: list[str] | None = None
 
 
 @router.post("/{campaign_id}/distribution/post")
@@ -652,6 +674,19 @@ async def post_distribution(
     if not grouped:
         raise HTTPException(status_code=400, detail="This campaign has no shops to determine regions from")
 
+    accounts_stmt = select(ClientSocialAccount).where(ClientSocialAccount.client_id == campaign.client_id)
+    connected_platforms = {a.platform for a in (await session.execute(accounts_stmt)).scalars().all()}
+    if not connected_platforms:
+        raise HTTPException(
+            status_code=400,
+            detail="No social/portal accounts are connected yet — connect at least one before posting.",
+        )
+
+    target_platforms = body.platforms if body.platforms is not None else sorted(connected_platforms)
+    not_connected = [p for p in target_platforms if p not in connected_platforms]
+    if not_connected:
+        raise HTTPException(status_code=400, detail=f"Not connected: {', '.join(not_connected)}")
+
     target_regions = body.regions if body.regions is not None else list(grouped.keys())
     unknown = [r for r in target_regions if r not in grouped]
     if unknown:
@@ -660,6 +695,8 @@ async def post_distribution(
     created = []
     for region in target_regions:
         for dtype, _label in DESTINATION_TYPES:
+            if dtype not in target_platforms:
+                continue
             post = DistributionPost(
                 campaign_id=campaign.id,
                 region=region,

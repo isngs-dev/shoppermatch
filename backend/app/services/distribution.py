@@ -23,14 +23,20 @@ from ..models import Shop
 
 # Whether JobSlinger and TrustedHerd actually support posting scoped to a
 # region is an open question in the source spec ("TO BE DEFINED") — assumed
-# yes here (uniformly, alongside Facebook) so the feature is demonstrable
-# end-to-end; flip this if that assumption turns out to be wrong for either
-# platform.
+# yes here (uniformly, alongside every platform) so the feature is
+# demonstrable end-to-end; flip this if that assumption turns out to be
+# wrong for either platform. A destination only ever actually appears for
+# a client if they've "connected" that platform (ClientSocialAccount) —
+# this is just the full menu of what CAN be connected.
 DESTINATION_TYPES: list[tuple[str, str]] = [
     ("facebook", "Facebook Group"),
+    ("instagram", "Instagram"),
+    ("linkedin", "LinkedIn"),
+    ("twitter", "Twitter / X"),
     ("jobslinger", "JobSlinger"),
     ("trustedherd", "TrustedHerd"),
 ]
+DESTINATION_LABELS: dict[str, str] = dict(DESTINATION_TYPES)
 
 
 def region_for_shop(shop: Shop) -> str:
@@ -43,11 +49,22 @@ def region_for_shop(shop: Shop) -> str:
 def destination_name(destination_type: str, region: str) -> str:
     if destination_type == "facebook":
         return f"{region} Mystery Shoppers — Facebook Group"
+    if destination_type == "instagram":
+        return f"@{region.lower().replace(' ', '')}mysteryshoppers"
+    if destination_type == "linkedin":
+        return f"{region} Mystery Shopper Network — LinkedIn Page"
+    if destination_type == "twitter":
+        return f"@{region.replace(' ', '')}Shoppers"
     if destination_type == "jobslinger":
         return f"JobSlinger — {region}"
     if destination_type == "trustedherd":
         return f"TrustedHerd — {region}"
     return f"{destination_type} — {region}"
+
+
+def default_account_name(platform: str, client_name: str) -> str:
+    label = DESTINATION_LABELS.get(platform, platform)
+    return f"{client_name} — {label}"
 
 
 def regions_for_shops(shops: list[Shop]) -> dict[str, list[Shop]]:

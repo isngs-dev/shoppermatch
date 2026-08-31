@@ -167,11 +167,22 @@ export const api = {
   campaignDistribution: (id: string) => request(`/api/campaigns/${id}/distribution`),
   generateDistributionImage: (id: string, message: string) =>
     request(`/api/campaigns/${id}/distribution/generate-image`, { method: "POST", body: { message } }),
-  postCampaignDistribution: (id: string, message: string, imageUrl?: string | null, regions?: string[]) =>
+  postCampaignDistribution: (
+    id: string,
+    message: string,
+    imageUrl?: string | null,
+    platforms?: string[],
+    regions?: string[]
+  ) =>
     request(`/api/campaigns/${id}/distribution/post`, {
       method: "POST",
-      body: { message, image_url: imageUrl ?? null, regions },
+      body: { message, image_url: imageUrl ?? null, platforms, regions },
     }),
+  clientSocialAccounts: () => request("/api/client/social-accounts"),
+  connectSocialAccount: (platform: string, accountName?: string) =>
+    request("/api/client/social-accounts/connect", { method: "POST", body: { platform, account_name: accountName } }),
+  disconnectSocialAccount: (platform: string) =>
+    request(`/api/client/social-accounts/${platform}`, { method: "DELETE" }),
   aiShopRecommendations: (campaignId: string, shopId: string, params?: Record<string, any>) =>
     request(`/api/campaigns/${campaignId}/shops/${shopId}/recommendations` + qs(params)),
   approveAiRecommendations: (campaignId: string, shopId: string, shopperIds: string[]) =>

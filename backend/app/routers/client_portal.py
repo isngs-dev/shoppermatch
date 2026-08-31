@@ -18,13 +18,14 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..database import get_session
 from ..deps import require_client
-from ..models import Campaign, Client, User
+from ..models import Campaign, Client, ClientSocialAccount, User
 from ..schemas import AccountActionRequest
 from ..security import verify_password
 from ..serializers import campaign_out
@@ -32,6 +33,7 @@ from ..services import exporters
 from ..services import reports as reports_service
 from ..services.ai import campaign_predictor
 from ..services.audit import record_audit
+from ..services.distribution import DESTINATION_TYPES, default_account_name
 from .campaigns import (
     _campaign_outreach,
     _campaign_shops_with_coverage,
@@ -464,3 +466,102 @@ async def export_campaign_report(
         media_type=exporters.MIME_TYPES[format],
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# --------------------------------------------------------------------------- #
+# Connected social/portal accounts (conceptual/demo — see
+# services/distribution.py). Client-level, shared across every campaign this
+# client owns — connect once here, then it's available on every campaign's
+# Distribution tab. "Connect" is a demo simulation (no real OAuth handshake
+# exists), same pattern as the rest of this feature.
+# --------------------------------------------------------------------------- #
+@router.get("/social-accounts")
+async def list_social_accounts(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    stmt = select(ClientSocialAccount).where(ClientSocialAccount.client_id == user.client_id)
+    accounts = (await session.execute(stmt)).scalars().all()
+    connected = {a.platform: a for a in accounts}
+    items = [
+        {
+            "platform": ptype,
+            "label": label,
+            "connected": ptype in connected,
+            "account_name": connected[ptype].account_name if ptype in connected else None,
+            "connected_at": connected[ptype].connected_at.isoformat() if ptype in connected else None,
+        }
+        for ptype, label in DESTINATION_TYPES
+    ]
+    return {"items": items}
+
+
+class ConnectSocialAccountRequest(BaseModel):
+    platform: str
+    account_name: str | None = None
+
+
+@router.post("/social-accounts/connect")
+async def connect_social_account(
+    body: ConnectSocialAccountRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    valid_platforms = {p for p, _ in DESTINATION_TYPES}
+    if body.platform not in valid_platforms:
+        raise HTTPException(status_code=400, detail=f"Unknown platform: {body.platform}")
+
+    client = await session.get(Client, user.client_id)
+    existing_stmt = select(ClientSocialAccount).where(
+        ClientSocialAccount.client_id == user.client_id, ClientSocialAccount.platform == body.platform
+    )
+    existing = (await session.execute(existing_stmt)).scalar_one_or_none()
+    account_name = body.account_name or default_account_name(body.platform, client.company_name if client else "Client")
+    if existing:
+        existing.account_name = account_name
+    else:
+        session.add(
+            ClientSocialAccount(
+                client_id=user.client_id,
+                platform=body.platform,
+                account_name=account_name,
+                connected_by=user.email,
+            )
+        )
+    await record_audit(
+        session,
+        action="social_account.connected",
+        actor=user.email,
+        entity_type="client",
+        entity_id=str(user.client_id),
+        summary=f"Connected {body.platform} account: {account_name}",
+        meta={"platform": body.platform, "account_name": account_name},
+    )
+    await session.commit()
+    return {"platform": body.platform, "account_name": account_name, "connected": True}
+
+
+@router.delete("/social-accounts/{platform}")
+async def disconnect_social_account(
+    platform: str,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    stmt = select(ClientSocialAccount).where(
+        ClientSocialAccount.client_id == user.client_id, ClientSocialAccount.platform == platform
+    )
+    existing = (await session.execute(stmt)).scalar_one_or_none()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Not connected")
+    await session.delete(existing)
+    await record_audit(
+        session,
+        action="social_account.disconnected",
+        actor=user.email,
+        entity_type="client",
+        entity_id=str(user.client_id),
+        summary=f"Disconnected {platform} account",
+        meta={"platform": platform},
+    )
+    await session.commit()
+    return {"platform": platform, "connected": False}

@@ -56,8 +56,12 @@ const SILENT_WAV =
 
 type Status = "off" | "listening" | "recording" | "thinking" | "speaking" | "error";
 type ChatMessage = { role: "user" | "assistant"; content: string };
-type PendingConfirm = { name: "send_campaign_invitations" | "start_campaign_automation"; arguments: any };
+type PendingConfirm = {
+  name: "send_campaign_invitations" | "start_campaign_automation" | "post_distribution";
+  arguments: any;
+};
 type Draft = { subject: string; body: string };
+type DistributionDraft = { campaignId: string; campaignName: string; message: string };
 
 const PAGE_PATHS: Record<string, string> = {
   dashboard: "/client/dashboard",
@@ -95,6 +99,7 @@ export function ClientVoiceAssistant() {
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const pendingConfirmRef = useRef<PendingConfirm | null>(null);
   const lastDraftRef = useRef<Draft | null>(null);
+  const lastDistributionDraftRef = useRef<DistributionDraft | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const statusRef = useRef<Status>("off");
   const enabledRef = useRef(enabled);
@@ -221,14 +226,18 @@ export function ClientVoiceAssistant() {
     await speak(text);
   }
 
+  async function resolveCampaign(campaignName: string): Promise<any | null> {
+    const [activeRes, upcomingRes] = await Promise.all([
+      api.campaigns({ status: "active" }),
+      api.campaigns({ status: "upcoming" }),
+    ]);
+    const all = [...(activeRes.items || []), ...(upcomingRes.items || [])];
+    return all.find((c: any) => c.name.toLowerCase().includes(campaignName.toLowerCase())) || null;
+  }
+
   async function executeConfirmedSend(campaignName: string) {
     try {
-      const [activeRes, upcomingRes] = await Promise.all([
-        api.campaigns({ status: "active" }),
-        api.campaigns({ status: "upcoming" }),
-      ]);
-      const all = [...(activeRes.items || []), ...(upcomingRes.items || [])];
-      const campaign = all.find((c: any) => c.name.toLowerCase().includes(campaignName.toLowerCase()));
+      const campaign = await resolveCampaign(campaignName);
       if (!campaign) {
         await respondAndSpeak(`I couldn't find a campaign called ${campaignName}.`);
         return;
@@ -256,12 +265,7 @@ export function ClientVoiceAssistant() {
 
   async function executeStartAutomation(campaignName: string) {
     try {
-      const [activeRes, upcomingRes] = await Promise.all([
-        api.campaigns({ status: "active" }),
-        api.campaigns({ status: "upcoming" }),
-      ]);
-      const all = [...(activeRes.items || []), ...(upcomingRes.items || [])];
-      const campaign = all.find((c: any) => c.name.toLowerCase().includes(campaignName.toLowerCase()));
+      const campaign = await resolveCampaign(campaignName);
       if (!campaign) {
         await respondAndSpeak(`I couldn't find a campaign called ${campaignName}.`);
         return;
@@ -292,6 +296,40 @@ export function ClientVoiceAssistant() {
       await respondAndSpeak(`Started the email automation for ${campaign.name} — ${chosen.length} shopper(s) are queued.`);
     } catch {
       await respondAndSpeak("Sorry, something went wrong starting that automation.");
+    }
+  }
+
+  async function executePostDistribution(campaignName: string) {
+    const draft = lastDistributionDraftRef.current;
+    if (!draft || draft.campaignName.toLowerCase() !== campaignName.toLowerCase()) {
+      await respondAndSpeak(`I don't have a drafted post for ${campaignName} — ask me to write one first.`);
+      return;
+    }
+    try {
+      const accountsRes = await api.clientSocialAccounts();
+      const connected = (accountsRes.items || []).filter((a: any) => a.connected);
+      if (!connected.length) {
+        await respondAndSpeak(
+          `You don't have any accounts connected yet — connect at least one on the Distribution tab first.`
+        );
+        return;
+      }
+      const imageUrl = await api.generateDistributionImage(draft.campaignId, draft.message).then((r) => r.image_url);
+      const res = await api.postCampaignDistribution(
+        draft.campaignId,
+        draft.message,
+        imageUrl,
+        connected.map((a: any) => a.platform)
+      );
+      toast(`Voice assistant: posted to ${res.count} regional destination(s) for ${draft.campaignName}.`, "success");
+      await respondAndSpeak(`Posted to ${res.count} regional destination(s) for ${draft.campaignName}.`);
+      // Refresh if we're already looking at that campaign's Distribution tab
+      // so the new post shows up without the client having to do it manually.
+      if (locationRef.current.includes("/client/campaigns/")) {
+        window.setTimeout(() => window.location.reload(), 800);
+      }
+    } catch (e: any) {
+      await respondAndSpeak(e?.message || "Sorry, something went wrong posting that.");
     }
   }
 
@@ -329,6 +367,17 @@ export function ClientVoiceAssistant() {
       switch (action.name) {
         case "navigate": {
           const page = action.arguments?.page;
+          if (page === "campaign_detail") {
+            const campaign = await resolveCampaign(action.arguments?.campaign_name || "");
+            if (!campaign) {
+              await speak(`I couldn't find a campaign called ${action.arguments?.campaign_name}.`);
+              return;
+            }
+            const tab = action.arguments?.detail_tab;
+            navigate(`/client/campaigns/${campaign.id}${tab ? `?tab=${tab}` : ""}`);
+            await speak(replyText);
+            return;
+          }
           let path = PAGE_PATHS[page];
           if (path && page === "campaigns" && action.arguments?.campaign_filter) {
             path = `${path}/${action.arguments.campaign_filter}`;
@@ -347,6 +396,30 @@ export function ClientVoiceAssistant() {
           return;
         case "apply_draft_to_outreach":
           applyDraftToOutreach(replyText);
+          return;
+        case "draft_distribution_post": {
+          const campaign = await resolveCampaign(action.arguments?.campaign_name || "");
+          if (!campaign) {
+            await speak(`I couldn't find a campaign called ${action.arguments?.campaign_name}.`);
+            return;
+          }
+          lastDistributionDraftRef.current = {
+            campaignId: campaign.id,
+            campaignName: campaign.name,
+            message: action.arguments?.message || "",
+          };
+          await speak(replyText);
+          return;
+        }
+        case "propose_post_distribution":
+          pendingConfirmRef.current = { name: "post_distribution", arguments: action.arguments };
+          await speak(replyText);
+          return;
+        case "post_distribution":
+          // Safety net: same pattern as every other real send — never
+          // execute straight off the first utterance.
+          pendingConfirmRef.current = { name: "post_distribution", arguments: action.arguments };
+          await speak(`Just to confirm — post that for ${action.arguments?.campaign_name}? Say confirm to go ahead.`);
           return;
         case "propose_send_invitations":
           pendingConfirmRef.current = { name: "send_campaign_invitations", arguments: action.arguments };
@@ -404,8 +477,10 @@ export function ClientVoiceAssistant() {
           setStatus("thinking");
           if (pending.name === "send_campaign_invitations") {
             await executeConfirmedSend(pending.arguments?.campaign_name || "");
-          } else {
+          } else if (pending.name === "start_campaign_automation") {
             await executeStartAutomation(pending.arguments?.campaign_name || "");
+          } else {
+            await executePostDistribution(pending.arguments?.campaign_name || "");
           }
         } else if (CANCEL_WORDS.test(text)) {
           await respondAndSpeak("Okay, cancelled.");
