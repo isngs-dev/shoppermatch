@@ -33,15 +33,25 @@ async def voice_command(
     audio: UploadFile | None = File(default=None),
     transcript: str | None = Form(default=None),
     context: str = Form(default="{}"),
+    history: str = Form(default="[]"),
     user: User = Depends(require_client),
 ):
     """Accepts either a recorded audio clip (transcribed via Whisper) or an
-    already-known transcript (used by the frontend's own quick text-command
-    box, and by tests) — either way, runs the same reasoning step."""
+    already-known transcript (typed chat messages, and tests) — either way,
+    runs the same reasoning step. `history` is the client-held conversation
+    log (a plain list of {role, content}) — this endpoint is otherwise
+    stateless, so multi-turn memory ("edit it", "that campaign") only works
+    because the frontend resends it every call."""
     try:
         parsed_context = json.loads(context) if context else {}
     except json.JSONDecodeError:
         parsed_context = {}
+    try:
+        parsed_history = json.loads(history) if history else []
+        if not isinstance(parsed_history, list):
+            parsed_history = []
+    except json.JSONDecodeError:
+        parsed_history = []
 
     final_transcript = transcript
     if audio is not None:
@@ -51,9 +61,9 @@ async def voice_command(
         final_transcript = await transcribe_audio(audio_bytes, audio.filename or "clip.webm", audio.content_type or "audio/webm")
 
     if not final_transcript or not final_transcript.strip():
-        return {"transcript": "", "reply_text": "I didn't hear anything — try again.", "action": None}
+        return {"transcript": "", "reply_text": "I didn't hear anything — try again.", "history_text": "", "action": None}
 
-    result = await run_agent(final_transcript, parsed_context)
+    result = await run_agent(final_transcript, parsed_context, parsed_history)
     return {"transcript": final_transcript, **result}
 
 

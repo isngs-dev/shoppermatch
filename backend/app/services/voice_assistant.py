@@ -1,4 +1,8 @@
-"""Voice Assistant — the client portal's "Hey" wake-word assistant.
+"""Voice Assistant — the client portal's "Hey" wake-word assistant, now a
+chatbot+voice hybrid: it keeps conversation memory across turns (so "make it
+shorter" after "draft me an email" refers back to that draft), can draft/
+revise email copy directly, and can trigger a real campaign-wide Email
+Automation send.
 
 Three real OpenAI calls, each a thin httpx wrapper (same lazy-import-httpx
 pattern as services/email.py's SendGrid path — no vendor SDK dependency):
@@ -24,9 +28,10 @@ from fastapi import HTTPException
 from ..config import settings
 
 # The only actions the assistant is allowed to ask the frontend to take.
-# Kept deliberately small: reads/navigation are unrestricted, but the one
-# real write action (send_campaign_invitations) always gets a spoken
-# confirmation round-trip in the frontend before it actually calls the API.
+# Kept deliberately small: reads/navigation/drafting are unrestricted, but
+# every real write action (send_campaign_invitations,
+# start_campaign_automation) always gets a spoken confirmation round-trip in
+# the frontend before it actually calls the API.
 TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -42,6 +47,7 @@ TOOLS: list[dict[str, Any]] = [
                             "dashboard",
                             "campaigns",
                             "email-automation",
+                            "outreach",
                             "insights",
                             "reports",
                             "profile",
@@ -63,20 +69,43 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "send_campaign_invitations",
+            "name": "reload_page",
+            "description": "Reload the current page, per the client's request.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "draft_email",
             "description": (
-                "Auto-assign and email AI-recommended shoppers across every shop in a named "
-                "active campaign — the voice equivalent of the Auto Assign Shoppers button. "
-                "Only call this once the client has clearly confirmed (e.g. said 'yes' or "
-                "'confirm' or 'send it') after being asked; otherwise call propose_send_invitations."
+                "Write or revise an email subject + body for the client to review — a mystery-"
+                "shopping invitation, reminder, or similar. If the client is asking to change a "
+                "draft you already wrote earlier in this conversation (e.g. 'make it shorter', "
+                "'more casual', 'add the deadline'), revise THAT draft and return the full updated "
+                "text, not just the changed part. Plain text only — no markdown, no HTML."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "campaign_name": {"type": "string", "description": "Name (or close match) of the campaign, from the provided context."},
+                    "subject": {"type": "string"},
+                    "body": {"type": "string"},
                 },
-                "required": ["campaign_name"],
+                "required": ["subject", "body"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "apply_draft_to_outreach",
+            "description": (
+                "Put the most recently drafted email into the Outreach compose box, per the "
+                "client's request (e.g. 'use this', 'put it in outreach', 'edit this email in "
+                "outreach'). Only call this after draft_email has produced something in this "
+                "conversation."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -84,15 +113,65 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "propose_send_invitations",
             "description": (
-                "First step of a send request — identifies the campaign and asks the client "
-                "to confirm out loud before anything is actually sent. Always call this before "
-                "send_campaign_invitations, never send_campaign_invitations directly on the first ask."
+                "First step of an Outreach send request — identifies the campaign and asks the "
+                "client to confirm out loud before anything is actually sent. Always call this "
+                "before send_campaign_invitations, never send_campaign_invitations directly on "
+                "the first ask. Use this (not the Email Automation tools) when the client just "
+                "says 'send invitations' / 'email the shoppers' without mentioning automation."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "campaign_name": {"type": "string"},
-                },
+                "properties": {"campaign_name": {"type": "string", "description": "Name (or close match) of the campaign, from the provided context."}},
+                "required": ["campaign_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_campaign_invitations",
+            "description": (
+                "Auto-assign and email AI-recommended shoppers across every shop in a named "
+                "active campaign — the voice equivalent of the Auto Assign Shoppers button. "
+                "Only call this once the client has clearly confirmed (e.g. said 'yes' or "
+                "'confirm' or 'send it') after propose_send_invitations."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"campaign_name": {"type": "string"}},
+                "required": ["campaign_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_start_automation",
+            "description": (
+                "First step of an Email Automation request — the client wants a multi-step email "
+                "sequence sent to every shopper across a named campaign (e.g. 'in email automation, "
+                "send mail to active campaign's shoppers'). Identifies the campaign and asks the "
+                "client to confirm out loud. Always call this before start_campaign_automation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"campaign_name": {"type": "string"}},
+                "required": ["campaign_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "start_campaign_automation",
+            "description": (
+                "Creates and immediately starts a campaign-wide Email Automation covering every "
+                "AI-recommended shopper across every shop in the named campaign. Only call this "
+                "once the client has clearly confirmed after propose_start_automation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"campaign_name": {"type": "string"}},
                 "required": ["campaign_name"],
             },
         },
@@ -127,24 +206,39 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
-SYSTEM_PROMPT = """You are the voice assistant embedded in ShopperMatch.AI's \
-client portal — a mystery-shopping campaign dashboard. The client just spoke \
-a command after saying "Hey". You are given the current page and live \
-dashboard/campaign data as JSON context.
+SYSTEM_PROMPT = """You are the voice + chat assistant embedded in \
+ShopperMatch.AI's client portal — a mystery-shopping campaign dashboard. \
+You're given the current page and live dashboard/campaign data as JSON \
+context, plus the recent conversation history. Use that history: if the \
+client refers back to something they or you said earlier ("edit it", "make \
+it shorter", "that campaign"), resolve it from history rather than asking \
+them to repeat themselves.
 
 Rules:
 - If the client is asking a question answerable from the provided context \
   (a stat, a count, campaign status, etc.), just answer in one or two short \
-  spoken sentences — no tool call needed.
+  sentences — no tool call needed.
 - If they want to go somewhere, call `navigate`. If they mention active, \
-  upcoming, or completed campaigns specifically (e.g. "show my upcoming \
-  campaigns"), set `campaign_filter` accordingly on the campaigns page.
-- If they want invitations/emails sent for a campaign, call \
-  `propose_send_invitations` first and ask them to confirm out loud — only \
-  call `send_campaign_invitations` on a clear follow-up confirmation.
+  upcoming, or completed campaigns specifically, set `campaign_filter` \
+  accordingly on the campaigns page.
+- If they want to reload the page, call `reload_page`.
+- If they want an email written, drafted, or an existing draft changed \
+  (any request to compose/write/edit email copy), you MUST call the \
+  `draft_email` tool with the FULL subject + body (not a diff) — never write \
+  the subject/body directly in your own reply text, even formatted with \
+  markdown. The tool call is the ONLY way that draft becomes usable later. \
+  If they then say something like "use this" / "put it in outreach", call \
+  `apply_draft_to_outreach`.
+- Outreach sends (one-off invitations, "send invitations", "email the \
+  shoppers") go through propose_send_invitations -> send_campaign_invitations. \
+  Email Automation sends (an ongoing multi-step sequence, "in email \
+  automation...", "send an automation to...") go through \
+  propose_start_automation -> start_campaign_automation. Always propose \
+  first and require a clear spoken/typed confirmation before the actual \
+  send tool.
 - If they want to stop the assistant, call `disable_assistant`.
-- Keep every spoken reply short — one or two sentences, like a voice \
-  assistant, never a long paragraph.
+- Keep replies short — one or two sentences — EXCEPT when returning an email \
+  draft, where the full subject/body belongs in the tool arguments.
 - If the command is unclear or unrelated to this app, say so briefly and \
   ask them to rephrase — never invent data that isn't in the context."""
 
@@ -166,17 +260,29 @@ async def transcribe_audio(audio_bytes: bytes, filename: str, content_type: str)
     return res.json().get("text", "").strip()
 
 
-async def run_agent(transcript: str, context: dict[str, Any]) -> dict[str, Any]:
-    """Returns {"reply_text": str, "action": {"name": str, "arguments": dict} | None}."""
+async def run_agent(transcript: str, context: dict[str, Any], history: list[dict[str, str]] | None = None) -> dict[str, Any]:
+    """Returns {"reply_text": str, "history_text": str, "action": {...} | None}.
+
+    `reply_text` is what gets spoken/shown as the assistant's short turn;
+    `history_text` is what gets stored in the conversation log the client
+    resends next turn — usually the same, but for draft_email it's the full
+    subject/body so a later "make it shorter" can actually see what to
+    shorten."""
     import httpx
 
     if not settings.openai_api_key:
         raise HTTPException(status_code=503, detail="Voice assistant is not configured (missing OPENAI_API_KEY).")
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Context (JSON): {json.dumps(context, default=str)}\n\nClient said: \"{transcript}\""},
-    ]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for turn in history or []:
+        role = turn.get("role")
+        content = turn.get("content")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    messages.append(
+        {"role": "user", "content": f"Context (JSON): {json.dumps(context, default=str)}\n\nClient said: \"{transcript}\""}
+    )
+
     async with httpx.AsyncClient(timeout=30) as client:
         res = await client.post(
             "https://api.openai.com/v1/chat/completions",
@@ -186,7 +292,7 @@ async def run_agent(transcript: str, context: dict[str, Any]) -> dict[str, Any]:
                 "messages": messages,
                 "tools": TOOLS,
                 "tool_choice": "auto",
-                "temperature": 0.3,
+                "temperature": 0.4,
             },
         )
     if res.status_code >= 400:
@@ -200,10 +306,13 @@ async def run_agent(transcript: str, context: dict[str, Any]) -> dict[str, Any]:
             arguments = json.loads(call.get("arguments") or "{}")
         except json.JSONDecodeError:
             arguments = {}
-        reply_text = _default_reply_for(call["name"], arguments)
-        return {"reply_text": reply_text, "action": {"name": call["name"], "arguments": arguments}}
+        name = call["name"]
+        reply_text = _default_reply_for(name, arguments)
+        history_text = _history_text_for(name, arguments, reply_text)
+        return {"reply_text": reply_text, "history_text": history_text, "action": {"name": name, "arguments": arguments}}
 
-    return {"reply_text": (choice.get("content") or "Sorry, I didn't catch that.").strip(), "action": None}
+    text = (choice.get("content") or "Sorry, I didn't catch that.").strip()
+    return {"reply_text": text, "history_text": text, "action": None}
 
 
 def _default_reply_for(name: str, arguments: dict[str, Any]) -> str:
@@ -213,11 +322,22 @@ def _default_reply_for(name: str, arguments: dict[str, Any]) -> str:
         if page == "campaigns" and campaign_filter:
             return f"Opening your {campaign_filter} campaigns."
         return f"Opening {page}."
+    if name == "reload_page":
+        return "Reloading the page."
+    if name == "draft_email":
+        return "Here's a draft — check the chat. Say \"edit it\" with changes, or \"use this in outreach\" to apply it."
+    if name == "apply_draft_to_outreach":
+        return "Applied to the Outreach compose box."
     if name == "propose_send_invitations":
         campaign = arguments.get("campaign_name", "this campaign")
         return f"I'll auto-assign and email AI-recommended shoppers across {campaign}. Say confirm to go ahead."
     if name == "send_campaign_invitations":
         return f"Sending invitations for {arguments.get('campaign_name', 'the campaign')} now."
+    if name == "propose_start_automation":
+        campaign = arguments.get("campaign_name", "this campaign")
+        return f"I'll start an email automation sequence to every shopper across {campaign}. Say confirm to go ahead."
+    if name == "start_campaign_automation":
+        return f"Starting the email automation for {arguments.get('campaign_name', 'the campaign')} now."
     if name == "toggle_theme":
         return f"Switching to {arguments.get('mode', 'the other')} mode."
     if name == "disable_assistant":
@@ -225,6 +345,14 @@ def _default_reply_for(name: str, arguments: dict[str, Any]) -> str:
     if name == "log_out":
         return "Signing you out."
     return "Done."
+
+
+def _history_text_for(name: str, arguments: dict[str, Any], reply_text: str) -> str:
+    if name == "draft_email":
+        subject = arguments.get("subject", "")
+        body = arguments.get("body", "")
+        return f"Drafted email:\nSubject: {subject}\n\n{body}"
+    return reply_text
 
 
 async def synthesize_speech(text: str) -> bytes:

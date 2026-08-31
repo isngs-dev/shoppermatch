@@ -232,6 +232,31 @@ export function Outreach() {
   const [subject, setSubject] = useState(builtinTemplates("active").standard.subject);
   const [body, setBody] = useState(builtinTemplates("active").standard.body);
 
+  // Lets the voice/chat assistant (mounted globally in ClientLayout, so it
+  // has no direct access to this page's compose state) push a drafted email
+  // into these exact fields when the client says "use this in outreach" —
+  // decoupled via a plain window event rather than lifting subject/body into
+  // shared state just for this one cross-component link.
+  useEffect(() => {
+    function onApplyDraft(e: Event) {
+      const detail = (e as CustomEvent<{ subject: string; body: string }>).detail;
+      if (!detail) return;
+      setTemplateKey("custom");
+      setSubject(detail.subject || "");
+      setBody(
+        (detail.body || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\n/g, "<br>")
+      );
+      toast("Applied the assistant's draft to this compose box.", "success");
+    }
+    window.addEventListener("sm:apply-email-draft", onApplyDraft);
+    return () => window.removeEventListener("sm:apply-email-draft", onApplyDraft);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // AI-recommended candidates for the selected shop — this is what actually
   // populates the Shopper dropdown (spec: shoppers come from the existing
   // AI matching engine, not a flat unranked list).

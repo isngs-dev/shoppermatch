@@ -8,12 +8,12 @@ import { IconMic, IconX } from "./Icons";
 import { useToast } from "./ui";
 
 // --------------------------------------------------------------------------- //
-// Client-portal voice assistant — "Hey <command>", Alexa-style. Distinct from
-// the admin-only VoiceAssistant.tsx (Web Speech API + /api/ai/ask, no API
-// key): this one is client-only, backed by real OpenAI calls (Whisper + GPT
-// tool-calling + TTS) via /api/voice/*, and only ever renders when the
-// backend reports an OpenAI key is actually configured (services/
-// voice_assistant.py + routers/voice.py).
+// Client-portal voice + chat assistant — "Hey <command>", Alexa-style, with a
+// real chat window and cross-turn memory. Distinct from the admin-only
+// VoiceAssistant.tsx (Web Speech API + /api/ai/ask, no API key): this one is
+// client-only, backed by real OpenAI calls (Whisper + GPT tool-calling + TTS)
+// via /api/voice/*, and only ever renders when the backend reports an OpenAI
+// key is actually configured (services/voice_assistant.py + routers/voice.py).
 //
 // Two speech APIs, deliberately split by cost/reliability:
 //   1. The browser's own free SpeechRecognition, running continuously in the
@@ -21,14 +21,18 @@ import { useToast } from "./ui";
 //      matter much for that, and running Whisper 24/7 while a client just
 //      sits on the dashboard would be pure cost for no reason.
 //   2. Once "hey" fires, a short clip is recorded and sent to the backend
-//      (OpenAI Whisper) for a real transcription, then to GPT (tool-calling)
-//      to decide what to do. That reply is spoken back via OpenAI TTS.
+//      (OpenAI Whisper) for a real transcription, then to GPT (tool-calling,
+//      with the recent chat history attached) to decide what to do. That
+//      reply is spoken back via OpenAI TTS AND shown in the chat window —
+//      typed messages go through the exact same pipeline, minus the audio
+//      steps, so it works as a normal chatbot too.
 //
-// A real write action (sending invitations) is never executed from a single
-// utterance: the backend always turns that into a "propose" step, and this
-// component then requires one more spoken "yes/confirm" — checked locally,
-// deterministically, not by asking the LLM again — before it actually calls
-// the same api.* functions a click on Auto Assign Shoppers would have used.
+// Every real write action (sending invitations, starting an email
+// automation) is never executed from a single utterance: the backend always
+// turns that into a "propose" step, and this component then requires one
+// more spoken/typed "yes/confirm" — checked locally, deterministically, not
+// by asking the LLM again — before it actually calls the same api.*
+// functions a click on Auto Assign Shoppers / New Automation would have used.
 // --------------------------------------------------------------------------- //
 
 const ENABLED_KEY = "sm_client_voice_enabled";
@@ -36,14 +40,14 @@ const CONFIRM_WORDS = /\b(yes|yeah|yep|confirm|go ahead|do it|send it)\b/i;
 const CANCEL_WORDS = /\b(no|nope|cancel|never ?mind|stop)\b/i;
 const WAKE_WORD = /\bhey\b/i;
 const COMMAND_MS = 4500; // recording window after the wake word fires
+const MAX_HISTORY_TURNS = 12; // sent to the backend each call, bounds token cost
 
 // Shortest possible valid WAV file (a handful of silent samples) — played
 // once, synchronously inside a real click handler, purely to satisfy
 // Chrome's autoplay policy. Browsers block HTMLMediaElement.play() unless
 // it's tied to a recent user gesture; by the time a spoken reply is ready
 // (record -> transcribe -> reason -> synthesize takes several seconds),
-// the original "Enable" click no longer counts as "recent" — so without
-// this, every reply's audio would play() and silently fail. A play() that
+// the original "Enable" click no longer counts as "recent". A play() that
 // DOES succeed inside the click itself "unlocks" that Audio element for
 // programmatic playback for the rest of this page session, even later
 // outside a gesture.
@@ -51,11 +55,15 @@ const SILENT_WAV =
   "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
 
 type Status = "off" | "listening" | "recording" | "thinking" | "speaking" | "error";
+type ChatMessage = { role: "user" | "assistant"; content: string };
+type PendingConfirm = { name: "send_campaign_invitations" | "start_campaign_automation"; arguments: any };
+type Draft = { subject: string; body: string };
 
 const PAGE_PATHS: Record<string, string> = {
   dashboard: "/client/dashboard",
   campaigns: "/client/campaigns",
   "email-automation": "/client/email-automation",
+  outreach: "/client/outreach",
   insights: "/client/insights",
   reports: "/client/reports",
   profile: "/client/profile",
@@ -72,9 +80,9 @@ export function ClientVoiceAssistant() {
   const [enabled, setEnabled] = useState(() => localStorage.getItem(ENABLED_KEY) === "true");
   const [showPrompt, setShowPrompt] = useState(false);
   const [status, setStatus] = useState<Status>("off");
-  const [transcript, setTranscript] = useState("");
-  const [reply, setReply] = useState("");
-  const [expanded, setExpanded] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [textInput, setTextInput] = useState("");
   // Live wake-word-listening feed — not sent anywhere, purely so a client
   // (or anyone debugging "saying Hey does nothing") can visually confirm the
   // browser is actually hearing speech at all before worrying about whether
@@ -85,11 +93,14 @@ export function ClientVoiceAssistant() {
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
-  const pendingConfirmRef = useRef<{ name: string; arguments: any } | null>(null);
+  const pendingConfirmRef = useRef<PendingConfirm | null>(null);
+  const lastDraftRef = useRef<Draft | null>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
   const statusRef = useRef<Status>("off");
   const enabledRef = useRef(enabled);
   const locationRef = useRef(location.pathname);
   locationRef.current = location.pathname;
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   // Chrome's continuous SpeechRecognition has a known "zombie" failure mode:
   // the session object is still sitting there, still technically "started",
   // but has silently stopped picking up audio — and crucially never fires
@@ -107,6 +118,26 @@ export function ClientVoiceAssistant() {
   useEffect(() => {
     enabledRef.current = enabled;
   }, [enabled]);
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, chatOpen]);
+
+  function pushMessage(role: "user" | "assistant", content: string) {
+    const next = [...messagesRef.current, { role, content }];
+    messagesRef.current = next;
+    setMessages(next);
+  }
+
+  function replaceLastAssistantMessage(content: string) {
+    const next = [...messagesRef.current];
+    if (next.length && next[next.length - 1].role === "assistant") {
+      next[next.length - 1] = { role: "assistant", content };
+    } else {
+      next.push({ role: "assistant", content });
+    }
+    messagesRef.current = next;
+    setMessages(next);
+  }
 
   // Only ever shown/active when the backend actually has an OpenAI key
   // configured — otherwise this component renders nothing at all.
@@ -161,7 +192,6 @@ export function ClientVoiceAssistant() {
   }
 
   const speak = useCallback(async (text: string) => {
-    setReply(text);
     setStatus("speaking");
     try {
       const blob = await api.voiceSpeak(text);
@@ -186,6 +216,11 @@ export function ClientVoiceAssistant() {
     }
   }, []);
 
+  async function respondAndSpeak(text: string) {
+    pushMessage("assistant", text);
+    await speak(text);
+  }
+
   async function executeConfirmedSend(campaignName: string) {
     try {
       const [activeRes, upcomingRes] = await Promise.all([
@@ -195,7 +230,7 @@ export function ClientVoiceAssistant() {
       const all = [...(activeRes.items || []), ...(upcomingRes.items || [])];
       const campaign = all.find((c: any) => c.name.toLowerCase().includes(campaignName.toLowerCase()));
       if (!campaign) {
-        await speak(`I couldn't find a campaign called ${campaignName}.`);
+        await respondAndSpeak(`I couldn't find a campaign called ${campaignName}.`);
         return;
       }
       const proposal = await api.aiOptimizeAssignments(campaign.id);
@@ -213,13 +248,79 @@ export function ClientVoiceAssistant() {
         }
       }
       toast(`Voice assistant: approved ${created} invitation(s) for ${campaign.name}.`, "success");
-      await speak(`Done — approved ${created} invitations for ${campaign.name}. You can review and send them from Outreach.`);
-    } catch (e: any) {
-      await speak("Sorry, something went wrong sending those invitations.");
+      await respondAndSpeak(`Done — approved ${created} invitations for ${campaign.name}. You can review and send them from Outreach.`);
+    } catch {
+      await respondAndSpeak("Sorry, something went wrong sending those invitations.");
     }
   }
 
-  const handleAction = useCallback(
+  async function executeStartAutomation(campaignName: string) {
+    try {
+      const [activeRes, upcomingRes] = await Promise.all([
+        api.campaigns({ status: "active" }),
+        api.campaigns({ status: "upcoming" }),
+      ]);
+      const all = [...(activeRes.items || []), ...(upcomingRes.items || [])];
+      const campaign = all.find((c: any) => c.name.toLowerCase().includes(campaignName.toLowerCase()));
+      if (!campaign) {
+        await respondAndSpeak(`I couldn't find a campaign called ${campaignName}.`);
+        return;
+      }
+      const proposal = await api.aiOptimizeAssignments(campaign.id);
+      const chosen = proposal.proposals || [];
+      if (!chosen.length) {
+        await respondAndSpeak(`I couldn't find any AI-recommended shoppers for ${campaign.name}.`);
+        return;
+      }
+      const automation = await api.createAutomation({
+        campaign_id: campaign.id,
+        shop_id: null,
+        name: `${campaign.name} — Campaign Sequence`,
+        step_template_ids: [null, null, null],
+        wait_days: 2,
+        scheduled_start_at: null,
+        batch_size: null,
+        total_iterations: 1,
+      });
+      await api.addAutomationShoppers(
+        automation.id,
+        chosen.map((c: any) => c.shopper_id),
+        chosen.map((c: any) => c.shop_id)
+      );
+      await api.startAutomation(automation.id);
+      toast(`Voice assistant: started email automation for ${campaign.name} (${chosen.length} shopper(s)).`, "success");
+      await respondAndSpeak(`Started the email automation for ${campaign.name} — ${chosen.length} shopper(s) are queued.`);
+    } catch {
+      await respondAndSpeak("Sorry, something went wrong starting that automation.");
+    }
+  }
+
+  // `performAction` always runs after its caller has already pushed the
+  // backend's reply into `messages` — so branches in here must call `speak`
+  // only, never `respondAndSpeak` (that would push the SAME text a second
+  // time). The one exception: the backend can't know client-side whether a
+  // draft actually exists, so its default "Applied..." text can be wrong —
+  // that one message gets corrected in place rather than appending a second,
+  // contradictory one.
+  function applyDraftToOutreach(replyText: string) {
+    const draft = lastDraftRef.current;
+    if (!draft) {
+      const correction = "I don't have a draft yet — ask me to write one first.";
+      replaceLastAssistantMessage(correction);
+      speak(correction);
+      return;
+    }
+    const dispatch = () => window.dispatchEvent(new CustomEvent("sm:apply-email-draft", { detail: draft }));
+    if (locationRef.current !== "/client/outreach") {
+      navigate("/client/outreach");
+      window.setTimeout(dispatch, 500);
+    } else {
+      dispatch();
+    }
+    speak(replyText);
+  }
+
+  const performAction = useCallback(
     async (action: { name: string; arguments: any } | null, replyText: string) => {
       if (!action) {
         await speak(replyText);
@@ -236,6 +337,17 @@ export function ClientVoiceAssistant() {
           await speak(replyText);
           return;
         }
+        case "reload_page":
+          await speak(replyText);
+          window.setTimeout(() => window.location.reload(), 300);
+          return;
+        case "draft_email":
+          lastDraftRef.current = { subject: action.arguments?.subject || "", body: action.arguments?.body || "" };
+          await speak(replyText);
+          return;
+        case "apply_draft_to_outreach":
+          applyDraftToOutreach(replyText);
+          return;
         case "propose_send_invitations":
           pendingConfirmRef.current = { name: "send_campaign_invitations", arguments: action.arguments };
           await speak(replyText);
@@ -246,6 +358,14 @@ export function ClientVoiceAssistant() {
           // a pending confirmation and make the client say it again.
           pendingConfirmRef.current = { name: "send_campaign_invitations", arguments: action.arguments };
           await speak(`Just to confirm — you want invitations sent for ${action.arguments?.campaign_name}. Say confirm to go ahead.`);
+          return;
+        case "propose_start_automation":
+          pendingConfirmRef.current = { name: "start_campaign_automation", arguments: action.arguments };
+          await speak(replyText);
+          return;
+        case "start_campaign_automation":
+          pendingConfirmRef.current = { name: "start_campaign_automation", arguments: action.arguments };
+          await speak(`Just to confirm — you want an email automation started for ${action.arguments?.campaign_name}. Say confirm to go ahead.`);
           return;
         case "toggle_theme":
           if (action.arguments?.mode && action.arguments.mode !== theme) toggleTheme();
@@ -268,39 +388,48 @@ export function ClientVoiceAssistant() {
     [theme]
   );
 
-  const handleTranscript = useCallback(
+  const handleUserTurn = useCallback(
     async (text: string) => {
-      setTranscript(text);
       if (!text.trim()) {
         setStatus("listening");
         restartWakeWordListener();
         return;
       }
+      pushMessage("user", text);
 
       const pending = pendingConfirmRef.current;
       if (pending) {
         pendingConfirmRef.current = null;
         if (CONFIRM_WORDS.test(text)) {
           setStatus("thinking");
-          await executeConfirmedSend(pending.arguments?.campaign_name || "");
+          if (pending.name === "send_campaign_invitations") {
+            await executeConfirmedSend(pending.arguments?.campaign_name || "");
+          } else {
+            await executeStartAutomation(pending.arguments?.campaign_name || "");
+          }
         } else if (CANCEL_WORDS.test(text)) {
-          await speak("Okay, cancelled.");
+          await respondAndSpeak("Okay, cancelled.");
         } else {
-          await speak("I didn't catch a clear yes or no, so I've cancelled that for safety.");
+          await respondAndSpeak("I didn't catch a clear yes or no, so I've cancelled that for safety.");
         }
         return;
       }
 
       setStatus("thinking");
       try {
-        const res = await api.voiceCommand({ transcript: text, context: await buildContext() });
-        await handleAction(res.action, res.reply_text);
-      } catch (e: any) {
-        await speak("Sorry, I ran into a problem with that.");
+        const res = await api.voiceCommand({
+          transcript: text,
+          context: await buildContext(),
+          history: messagesRef.current.slice(0, -1).slice(-MAX_HISTORY_TURNS),
+        });
+        pushMessage("assistant", res.history_text || res.reply_text);
+        await performAction(res.action, res.reply_text);
+      } catch {
+        await respondAndSpeak("Sorry, I ran into a problem with that.");
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [handleAction]
+    [performAction]
   );
 
   const startCommandCapture = useCallback(() => {
@@ -312,6 +441,7 @@ export function ClientVoiceAssistant() {
       /* already stopped */
     }
     setStatus("recording");
+    setChatOpen(true);
     const chunks: BlobPart[] = [];
     const recorder = new MediaRecorder(streamRef.current);
     recorderRef.current = recorder;
@@ -321,16 +451,22 @@ export function ClientVoiceAssistant() {
     recorder.onstop = async () => {
       const blob = new Blob(chunks, { type: "audio/webm" });
       setStatus("thinking");
+      const pending = pendingConfirmRef.current;
       try {
-        const res = await api.voiceCommand({ audioBlob: blob, context: await buildContext() });
-        if (pendingConfirmRef.current) {
-          await handleTranscript(res.transcript || "");
-        } else {
-          setTranscript(res.transcript || "");
-          await handleAction(res.action, res.reply_text);
+        if (pending) {
+          // A yes/no confirmation is handled locally/deterministically —
+          // still needs Whisper to turn the clip into text, but skips the
+          // LLM reasoning call entirely.
+          const res = await api.voiceCommand({ audioBlob: blob, context: {} });
+          await handleUserTurn(res.transcript || "");
+          return;
         }
+        const res = await api.voiceCommand({ audioBlob: blob, context: await buildContext(), history: messagesRef.current.slice(-MAX_HISTORY_TURNS) });
+        pushMessage("user", res.transcript || "(unclear)");
+        pushMessage("assistant", res.history_text || res.reply_text);
+        await performAction(res.action, res.reply_text);
       } catch {
-        await speak("Sorry, I couldn't process that.");
+        await respondAndSpeak("Sorry, I couldn't process that.");
       }
     };
     recorder.start();
@@ -338,7 +474,7 @@ export function ClientVoiceAssistant() {
       if (recorderRef.current === recorder && recorder.state === "recording") recorder.stop();
     }, COMMAND_MS);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handleAction, handleTranscript]);
+  }, [performAction, handleUserTurn]);
 
   function restartWakeWordListener() {
     const rec = recognitionRef.current;
@@ -514,6 +650,14 @@ export function ClientVoiceAssistant() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 
+  async function submitTextMessage() {
+    const text = textInput.trim();
+    if (!text) return;
+    setTextInput("");
+    setChatOpen(true);
+    await handleUserTurn(text);
+  }
+
   if (!available) return null;
 
   return (
@@ -527,8 +671,8 @@ export function ClientVoiceAssistant() {
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Turn on the voice assistant?</div>
               <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                Say "Hey" anytime to navigate or ask about your campaigns hands-free. Needs one-time microphone
-                permission — say "Hey, stop listening" whenever you want it off.
+                Say "Hey" anytime to navigate, ask about your campaigns, draft emails, or send outreach — hands-free.
+                Needs one-time microphone permission — say "Hey, stop listening" whenever you want it off.
               </p>
               <div className="mt-2.5 flex gap-2">
                 <button className="btn-primary !py-1.5 text-xs" onClick={enableAssistant}>
@@ -545,51 +689,76 @@ export function ClientVoiceAssistant() {
 
       {!showPrompt && (
         <div className="fixed bottom-5 right-5 z-50 flex flex-col items-end gap-2">
-          {expanded && enabled && (
-            <div className="w-72 rounded-xl border border-slate-200 bg-white p-3 text-xs shadow-xl dark:border-slate-700 dark:bg-slate-900">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-700 dark:text-slate-200">Voice Assistant</span>
-                <button onClick={() => setExpanded(false)} className="text-slate-400 hover:text-slate-600">
-                  <IconX width={14} height={14} />
+          {chatOpen && enabled && (
+            <div className="flex h-[28rem] w-80 flex-col rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
+              <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2.5 dark:border-slate-800">
+                <div>
+                  <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Voice Assistant</span>
+                  <p className="text-[11px] text-slate-400">{STATUS_LABEL[status]}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="text-[11px] font-semibold text-rose-600 hover:underline dark:text-rose-400"
+                    onClick={disableAssistant}
+                  >
+                    Turn off
+                  </button>
+                  <button onClick={() => setChatOpen(false)} className="text-slate-400 hover:text-slate-600">
+                    <IconX width={14} height={14} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 space-y-2 overflow-y-auto px-3 py-2.5 text-xs">
+                {messages.length === 0 && (
+                  <p className="text-slate-400">
+                    Say "Hey" or type below. Try: "how many shoppers accepted", "open upcoming campaigns", "draft a
+                    reminder email", or "send invitations for [campaign]".
+                  </p>
+                )}
+                {messages.map((m, i) => (
+                  <div key={i} className={classNames("flex", m.role === "user" ? "justify-end" : "justify-start")}>
+                    <div
+                      className={classNames(
+                        "max-w-[85%] whitespace-pre-wrap rounded-lg px-2.5 py-1.5",
+                        m.role === "user"
+                          ? "bg-brand-600 text-white"
+                          : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                      )}
+                    >
+                      {m.content}
+                    </div>
+                  </div>
+                ))}
+                {status === "listening" && liveHeard && (
+                  <p className="italic text-slate-400">Hearing: "{liveHeard}"</p>
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+
+              <div className="flex items-center gap-1.5 border-t border-slate-100 p-2 dark:border-slate-800">
+                <input
+                  className="input h-8 flex-1 text-xs"
+                  placeholder="Type a message…"
+                  value={textInput}
+                  onChange={(e) => setTextInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitTextMessage();
+                  }}
+                />
+                <button className="btn-primary h-8 !px-3 text-xs" onClick={submitTextMessage} disabled={!textInput.trim()}>
+                  Send
                 </button>
               </div>
-              <p className="mt-1 text-slate-400">{STATUS_LABEL[status]}</p>
-              {status === "listening" && (
-                <p className="mt-1.5 rounded-lg bg-slate-50 px-2 py-1.5 text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
-                  {liveHeard ? (
-                    <>
-                      <span className="font-medium">Hearing:</span> "{liveHeard}"
-                    </>
-                  ) : (
-                    "Say \"Hey\" — if nothing appears here while you're talking, the browser isn't picking up your mic for recognition (try reloading the page)."
-                  )}
-                </p>
-              )}
-              {transcript && (
-                <p className="mt-1.5 text-slate-500 dark:text-slate-400">
-                  <span className="font-medium">You:</span> {transcript}
-                </p>
-              )}
-              {reply && (
-                <p className="mt-1 text-slate-700 dark:text-slate-200">
-                  <span className="font-medium">Assistant:</span> {reply}
-                </p>
-              )}
-              <button
-                className="mt-2 font-semibold text-rose-600 hover:underline dark:text-rose-400"
-                onClick={disableAssistant}
-              >
-                Turn off
-              </button>
             </div>
           )}
           <button
             onClick={() => {
               if (enabled) {
-                setExpanded((v) => !v);
+                setChatOpen((v) => !v);
               } else {
                 unlockAudio();
-                setExpanded(true); // show the status line immediately — if mic access
+                setChatOpen(true); // show the status line immediately — if mic access
                 // fails or the browser can't do this, that's visible right away as
                 // "Voice assistant unavailable" instead of a subtle color change.
                 enableAssistant();

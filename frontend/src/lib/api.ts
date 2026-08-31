@@ -349,11 +349,17 @@ export const api = {
 
   // ---- Voice Assistant ----
   voiceStatus: () => request("/api/voice/status"),
-  voiceCommand: (opts: { audioBlob?: Blob; transcript?: string; context: Record<string, any> }) => {
+  voiceCommand: (opts: {
+    audioBlob?: Blob;
+    transcript?: string;
+    context: Record<string, any>;
+    history?: { role: "user" | "assistant"; content: string }[];
+  }) => {
     const form = new FormData();
     if (opts.audioBlob) form.append("audio", opts.audioBlob, "clip.webm");
     if (opts.transcript) form.append("transcript", opts.transcript);
     form.append("context", JSON.stringify(opts.context));
+    if (opts.history) form.append("history", JSON.stringify(opts.history));
     return voiceRequest("/api/voice/command", form);
   },
   voiceSpeak: (text: string) => voiceSpeakRequest(text),
