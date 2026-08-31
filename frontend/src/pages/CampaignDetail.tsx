@@ -24,6 +24,7 @@ const TABS = [
   { key: "shoppers", label: "Shoppers" },
   { key: "recommendations", label: "AI Recommendations" },
   { key: "outreach", label: "Outreach" },
+  { key: "distribution", label: "Distribution" },
   { key: "tracking", label: "Tracking" },
   { key: "insights", label: "Insights" },
 ];
@@ -126,6 +127,7 @@ export function CampaignDetail({ id }: { id: string }) {
         <RecommendationsTab campaignId={id} campaign={c} initialShopId={shopParam} />
       )}
       {activeTab === "outreach" && <OutreachTab campaignId={id} bucket={bucket} />}
+      {activeTab === "distribution" && <DistributionTab campaignId={id} campaignName={c.name} />}
       {activeTab === "tracking" && <TrackingTab campaignId={id} />}
       {activeTab === "insights" && <InsightsTab campaignId={id} bucket={bucket} campaignName={c.name} />}
 
@@ -1135,6 +1137,153 @@ function OutreachTab({ campaignId, bucket }: { campaignId: string; bucket: strin
         </div>
         <Funnel stages={funnelStages} />
       </div>
+    </div>
+  );
+}
+
+// ------------------------------ Distribution ------------------------------ //
+// Region-Targeted Social Media Posting — conceptual/demo feature. Existing
+// behavior (per the product doc this implements) sends the same creative to
+// every owned page/portal equally; this adds a region-matching step in
+// front of that, so posting only reaches the destinations that actually
+// cover a shop in this campaign. There's no real Facebook/JobSlinger/
+// TrustedHerd API call behind "Post" — every destination and post here is
+// clearly labeled SIMULATED, same as this app's other demo-mode
+// integrations (SASSIE, etc.) — the region-matching itself is real, running
+// against this campaign's actual shop city/state data.
+const DESTINATION_ICON: Record<string, string> = {
+  facebook: "📘",
+  jobslinger: "💼",
+  trustedherd: "🤝",
+};
+
+function DistributionTab({ campaignId, campaignName }: { campaignId: string; campaignName: string }) {
+  const toast = useToast();
+  const { data, loading, error, reload } = useApi(() => api.campaignDistribution(campaignId), [campaignId]);
+  const [message, setMessage] = useState(`Now recruiting mystery shoppers for ${campaignName}! Apply today.`);
+  const [posting, setPosting] = useState(false);
+
+  if (loading && !data) return <Loading label="Loading distribution…" />;
+  if (error) return <ErrorBox message={error} onRetry={reload} />;
+
+  async function postToAll() {
+    if (!message.trim()) {
+      toast("Write the campaign creative first.", "error");
+      return;
+    }
+    setPosting(true);
+    try {
+      const res = await api.postCampaignDistribution(campaignId, message.trim());
+      toast(`Posted to ${res.count} regional destination(s).`, "success");
+      reload();
+    } catch (e: any) {
+      toast(e?.message || "Failed to post", "error");
+    } finally {
+      setPosting(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="card border border-amber-200 p-4 text-xs text-amber-700 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300">
+        <span className="font-semibold">SIMULATED</span> — this demonstrates region-matched posting using this
+        campaign's real shop locations. No live Facebook, JobSlinger, or TrustedHerd connection exists; nothing is
+        actually posted externally.
+      </div>
+
+      <div className="card p-5">
+        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Campaign creative</h2>
+        <p className="mt-1 text-xs text-slate-400">
+          The same message is sent to every region-matched destination below — targeting changes which pages/portals
+          receive it, not the content itself.
+        </p>
+        <textarea
+          className="input mt-3 h-24 w-full resize-none"
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+        />
+        <div className="mt-3 flex justify-end">
+          <button className="btn-primary" onClick={postToAll} disabled={posting}>
+            {posting ? <Spinner /> : null} Post to All Regions
+          </button>
+        </div>
+      </div>
+
+      {!data.regions.length ? (
+        <div className="card">
+          <EmptyState title="No shops to determine regions from" hint="Add shops to this campaign first." />
+        </div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2">
+          {data.regions.map((r: any) => (
+            <div key={r.region} className="card p-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">{r.region}</h3>
+                <span className="text-xs text-slate-400">
+                  {r.shop_count} shop{r.shop_count === 1 ? "" : "s"}
+                </span>
+              </div>
+              <p className="mt-0.5 truncate text-[11px] text-slate-400" title={r.shop_names.join(", ")}>
+                {r.shop_names.join(", ")}
+              </p>
+              <div className="mt-3 space-y-2">
+                {r.destinations.map((d: any) => (
+                  <div
+                    key={d.type}
+                    className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-xs dark:border-slate-800"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span>{DESTINATION_ICON[d.type] || "🌐"}</span>
+                      <span className="min-w-0 truncate font-medium text-slate-700 dark:text-slate-200" title={d.name}>
+                        {d.name}
+                      </span>
+                    </div>
+                    {d.last_post ? (
+                      <Badge className="shrink-0 bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                        Posted {fmtDate(d.last_post.posted_at)}
+                      </Badge>
+                    ) : (
+                      <Badge className="shrink-0 bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                        Not posted yet
+                      </Badge>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {data.recent_posts.length > 0 && (
+        <div className="card overflow-x-auto">
+          <div className="border-b border-slate-100 p-4 text-sm font-semibold text-slate-800 dark:border-slate-800 dark:text-slate-100">
+            Recent activity
+          </div>
+          <table className="min-w-full">
+            <thead className="border-b border-slate-100 dark:border-slate-800">
+              <tr>
+                <th className="th">Region</th>
+                <th className="th">Destination</th>
+                <th className="th">Posted</th>
+                <th className="th">By</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
+              {data.recent_posts.map((p: any) => (
+                <tr key={p.id}>
+                  <td className="td">{p.region}</td>
+                  <td className="td">
+                    {DESTINATION_ICON[p.destination_type] || "🌐"} {p.destination_name}
+                  </td>
+                  <td className="td text-slate-500">{fmtDate(p.posted_at)}</td>
+                  <td className="td text-slate-500">{p.posted_by}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

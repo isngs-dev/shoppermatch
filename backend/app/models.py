@@ -599,6 +599,33 @@ class AuditLog(Base):
     meta: Mapped[dict] = mapped_column(json_col(), default=dict)
 
 
+# --------------------------------------------------------------------------- #
+# Region-Targeted Social Media Posting (conceptual/demo feature) — one row
+# per simulated post of a campaign's creative to one region-matched
+# destination (a regional Facebook Group/Page, JobSlinger, or TrustedHerd
+# listing). There's no real Meta/JobSlinger/TrustedHerd API integration here
+# (see services/distribution.py) — this durably records what a client
+# demonstrably "posted" and when, same as every other action in this app,
+# without ever claiming a live external connection.
+# --------------------------------------------------------------------------- #
+class DistributionPost(Base):
+    __tablename__ = "distribution_posts"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="CASCADE"), index=True
+    )
+    region: Mapped[str] = mapped_column(String(120))
+    destination_type: Mapped[str] = mapped_column(String(60))  # facebook | jobslinger | trustedherd
+    destination_name: Mapped[str] = mapped_column(String(255))
+    message: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="posted")
+    posted_by: Mapped[str] = mapped_column(String(255))
+    posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+    campaign: Mapped["Campaign"] = relationship()
+
+
 # Event type + status constants (kept in one place for reuse across the app).
 class EventType:
     INVITATION_CREATED = "invitation_created"

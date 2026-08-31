@@ -18,9 +18,10 @@ from sqlalchemy.orm import selectinload
 
 from ..database import get_session
 from ..deps import require_operator
-from ..models import Campaign, EventType, Invitation, Shop, Shopper, User
-from ..serializers import campaign_out, invitation_row, shop_out, shopper_out
+from ..models import Campaign, DistributionPost, EventType, Invitation, Shop, Shopper, User
+from ..serializers import campaign_out, invitation_row, iso, shop_out, shopper_out
 from ..services.audit import record_audit
+from ..services.distribution import DESTINATION_TYPES, destination_name, regions_for_shops
 from ..services.selection import enforce_over_selection
 from ..services.semantic_matching import MATCHING_WEIGHTS, run_matching
 from ..services.tenancy import enforce_campaign_access
@@ -526,6 +527,146 @@ async def approve_ai_recommendations(
         entity_id=str(shop.id),
         summary=f"Approved {len(created)} AI-recommended shopper(s) for {shop.shop_name} ({campaign.name})",
         meta={"campaign": campaign.name, "shop": shop.shop_name, "shopper_ids": body.shopper_ids},
+    )
+    await session.commit()
+    return {"created": created, "count": len(created)}
+
+
+# --------------------------------------------------------------------------- #
+# Region-Targeted Social Media Posting (conceptual/demo — see
+# services/distribution.py for what this does and doesn't actually connect
+# to). Sits on the Campaign Detail "Distribution" tab.
+# --------------------------------------------------------------------------- #
+@router.get("/{campaign_id}/distribution")
+async def get_distribution(
+    campaign_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    campaign = await _require_campaign(session, campaign_id, user)
+    shops = await campaign.awaitable_attrs.shops
+    grouped = regions_for_shops(list(shops))
+
+    last_posts_stmt = (
+        select(DistributionPost)
+        .where(DistributionPost.campaign_id == campaign_id)
+        .order_by(DistributionPost.posted_at.desc())
+    )
+    all_posts = (await session.execute(last_posts_stmt)).scalars().all()
+    latest_by_key: dict[tuple[str, str], DistributionPost] = {}
+    for p in all_posts:
+        key = (p.region, p.destination_type)
+        if key not in latest_by_key:
+            latest_by_key[key] = p
+
+    regions_out = []
+    for region, region_shops in sorted(grouped.items()):
+        destinations = []
+        for dtype, dlabel in DESTINATION_TYPES:
+            last = latest_by_key.get((region, dtype))
+            destinations.append(
+                {
+                    "type": dtype,
+                    "label": dlabel,
+                    "name": destination_name(dtype, region),
+                    "last_post": (
+                        {
+                            "message": last.message,
+                            "posted_at": iso(last.posted_at),
+                            "posted_by": last.posted_by,
+                            "status": last.status,
+                        }
+                        if last
+                        else None
+                    ),
+                }
+            )
+        regions_out.append(
+            {
+                "region": region,
+                "shop_count": len(region_shops),
+                "shop_names": [s.shop_name for s in region_shops],
+                "destinations": destinations,
+            }
+        )
+
+    recent = [
+        {
+            "id": str(p.id),
+            "region": p.region,
+            "destination_type": p.destination_type,
+            "destination_name": p.destination_name,
+            "message": p.message,
+            "posted_at": iso(p.posted_at),
+            "posted_by": p.posted_by,
+            "status": p.status,
+        }
+        for p in all_posts[:20]
+    ]
+    return {"campaign_id": str(campaign_id), "regions": regions_out, "recent_posts": recent}
+
+
+class DistributionPostRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    # Omit to post to every region-matched destination for this campaign.
+    regions: list[str] | None = None
+
+
+@router.post("/{campaign_id}/distribution/post")
+async def post_distribution(
+    campaign_id: uuid.UUID,
+    body: DistributionPostRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    """Simulates the "Post Campaign Creative to the Matched Regional
+    Destination" step — same creative, sent once per region-matched
+    destination instead of blanket-posted everywhere. No real Meta/
+    JobSlinger/TrustedHerd call happens; this durably records what would
+    have been posted, same as the rest of this app's demo-mode integrations."""
+    campaign = await _require_campaign(session, campaign_id, user)
+    shops = await campaign.awaitable_attrs.shops
+    grouped = regions_for_shops(list(shops))
+    if not grouped:
+        raise HTTPException(status_code=400, detail="This campaign has no shops to determine regions from")
+
+    target_regions = body.regions if body.regions is not None else list(grouped.keys())
+    unknown = [r for r in target_regions if r not in grouped]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown region(s) for this campaign: {', '.join(unknown)}")
+
+    created = []
+    for region in target_regions:
+        for dtype, _label in DESTINATION_TYPES:
+            post = DistributionPost(
+                campaign_id=campaign.id,
+                region=region,
+                destination_type=dtype,
+                destination_name=destination_name(dtype, region),
+                message=body.message,
+                status="posted",
+                posted_by=user.email,
+            )
+            session.add(post)
+            await session.flush()
+            created.append(
+                {
+                    "id": str(post.id),
+                    "region": region,
+                    "destination_type": dtype,
+                    "destination_name": post.destination_name,
+                    "posted_at": iso(post.posted_at),
+                }
+            )
+
+    await record_audit(
+        session,
+        action="distribution.posted",
+        actor=user.email,
+        entity_type="campaign",
+        entity_id=str(campaign.id),
+        summary=f"Posted campaign creative to {len(created)} regional destination(s) for {campaign.name}",
+        meta={"campaign": campaign.name, "regions": target_regions, "count": len(created)},
     )
     await session.commit()
     return {"created": created, "count": len(created)}
