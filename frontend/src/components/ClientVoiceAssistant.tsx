@@ -62,6 +62,11 @@ export function ClientVoiceAssistant() {
   const [transcript, setTranscript] = useState("");
   const [reply, setReply] = useState("");
   const [expanded, setExpanded] = useState(false);
+  // Live wake-word-listening feed — not sent anywhere, purely so a client
+  // (or anyone debugging "saying Hey does nothing") can visually confirm the
+  // browser is actually hearing speech at all before worrying about whether
+  // the word "hey" itself was recognized correctly.
+  const [liveHeard, setLiveHeard] = useState("");
 
   const recognitionRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -72,6 +77,16 @@ export function ClientVoiceAssistant() {
   const enabledRef = useRef(enabled);
   const locationRef = useRef(location.pathname);
   locationRef.current = location.pathname;
+  // Chrome's continuous SpeechRecognition has a known "zombie" failure mode:
+  // the session object is still sitting there, still technically "started",
+  // but has silently stopped picking up audio — and crucially never fires
+  // `onend` to say so, so a restart-on-`onend` strategy alone can leave the
+  // wake word permanently unheard until a manual page reload. The watchdog
+  // below proactively tears down and recreates the session every ~40s
+  // instead of waiting to detect the failure, which there's no fully
+  // reliable signal for anyway.
+  const sessionStartedAtRef = useRef(0);
+  const startCommandCaptureRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     statusRef.current = status;
@@ -273,6 +288,7 @@ export function ClientVoiceAssistant() {
 
   const startCommandCapture = useCallback(() => {
     if (!streamRef.current) return;
+    setLiveHeard("");
     try {
       recognitionRef.current?.stop();
     } catch {
@@ -312,10 +328,21 @@ export function ClientVoiceAssistant() {
     if (!rec) return;
     try {
       rec.start();
+      sessionStartedAtRef.current = Date.now();
     } catch {
       /* already running */
     }
   }
+
+  // `startCommandCapture` gets recreated on re-renders (its deps change),
+  // but the recognition object — and the `onresult` closure attached to it
+  // — is only ever created ONCE (see `if (!recognitionRef.current)` below).
+  // Routing through a ref that's kept current on every render means that
+  // closure always invokes the latest version instead of being permanently
+  // frozen to whichever one existed at recognition-creation time.
+  useEffect(() => {
+    startCommandCaptureRef.current = startCommandCapture;
+  });
 
   const startListening = useCallback(async () => {
     const SpeechRecognitionCtor: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -344,9 +371,15 @@ export function ClientVoiceAssistant() {
       rec.lang = "en-US";
       rec.onresult = (event: any) => {
         if (statusRef.current !== "listening") return;
-        const latest = event.results[event.results.length - 1];
-        const text = latest[0].transcript;
-        if (WAKE_WORD.test(text)) startCommandCapture();
+        // Walk every new result since resultIndex (interim AND final) —
+        // checking only the very last entry in `event.results` can miss the
+        // wake word if more than one result lands in the same event.
+        let text = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          text += event.results[i][0].transcript + " ";
+        }
+        setLiveHeard(text.trim());
+        if (WAKE_WORD.test(text)) startCommandCaptureRef.current();
       };
       rec.onend = () => {
         // Browsers auto-stop continuous recognition after a silence
@@ -355,6 +388,7 @@ export function ClientVoiceAssistant() {
         if (enabledRef.current && statusRef.current === "listening") {
           try {
             rec.start();
+            sessionStartedAtRef.current = Date.now();
           } catch {
             /* race with a manual start — harmless */
           }
@@ -369,6 +403,37 @@ export function ClientVoiceAssistant() {
     restartWakeWordListener();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startCommandCapture]);
+
+  // Watchdog for the "zombie" failure mode described above: rather than try
+  // to detect a session that's gone silently deaf (no fully reliable signal
+  // for that), a wake-word-listening session is simply never allowed to live
+  // longer than ~40s — checked every 10s, proactively torn down and replaced
+  // whether or not it looks unhealthy. A fresh session is cheap and this is
+  // invisible to the user (still shows "listening" throughout); skipped
+  // entirely while mid-command/mid-reply so it never cuts someone off.
+  useEffect(() => {
+    const CHECK_MS = 10_000;
+    const MAX_SESSION_MS = 40_000;
+    const id = window.setInterval(() => {
+      if (!enabledRef.current || statusRef.current !== "listening") return;
+      if (Date.now() - sessionStartedAtRef.current <= MAX_SESSION_MS) return;
+      const stale = recognitionRef.current;
+      recognitionRef.current = null;
+      if (stale) {
+        try {
+          stale.onend = null;
+          stale.onerror = null;
+          stale.onresult = null;
+          (stale.abort || stale.stop).call(stale);
+        } catch {
+          /* discarding it either way */
+        }
+      }
+      startListening();
+    }, CHECK_MS);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function disableAssistant() {
     setEnabled(false);
@@ -427,7 +492,7 @@ export function ClientVoiceAssistant() {
 
       {enabled && status !== "off" && (
         <div className="fixed bottom-5 right-5 z-50 flex flex-col items-end gap-2">
-          {expanded && (transcript || reply) && (
+          {expanded && (
             <div className="w-72 rounded-xl border border-slate-200 bg-white p-3 text-xs shadow-xl dark:border-slate-700 dark:bg-slate-900">
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-slate-700 dark:text-slate-200">Voice Assistant</span>
@@ -435,6 +500,18 @@ export function ClientVoiceAssistant() {
                   <IconX width={14} height={14} />
                 </button>
               </div>
+              <p className="mt-1 text-slate-400">{STATUS_LABEL[status]}</p>
+              {status === "listening" && (
+                <p className="mt-1.5 rounded-lg bg-slate-50 px-2 py-1.5 text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+                  {liveHeard ? (
+                    <>
+                      <span className="font-medium">Hearing:</span> "{liveHeard}"
+                    </>
+                  ) : (
+                    "Say \"Hey\" — if nothing appears here while you're talking, the browser isn't picking up your mic for recognition (try reloading the page)."
+                  )}
+                </p>
+              )}
               {transcript && (
                 <p className="mt-1.5 text-slate-500 dark:text-slate-400">
                   <span className="font-medium">You:</span> {transcript}
