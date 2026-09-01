@@ -19,7 +19,7 @@ from sqlalchemy.orm import selectinload
 from ..config import settings
 from ..database import get_session
 from ..deps import require_operator
-from ..models import Campaign, EmailComposition, EventType, Invitation, Shop, Shopper, User
+from ..models import Campaign, EmailComposition, EventType, Invitation, Shop, ShopBonus, Shopper, User
 from ..schemas import BulkInvitationCreateRequest, InvitationCreateRequest, SendTestRequest, SimulateRequest
 from ..serializers import invitation_detail, invitation_row
 from ..services.audit import record_audit
@@ -77,6 +77,15 @@ async def load_full(session: AsyncSession, invitation_id: uuid.UUID) -> Invitati
 async def next_reference(session: AsyncSession) -> str:
     count = await session.scalar(select(func.count(Invitation.id)))
     return f"INV-{(count or 0) + 1:04d}"
+
+
+async def _bonuses_by_shop(session: AsyncSession, shop_ids: set[uuid.UUID]) -> dict:
+    if not shop_ids:
+        return {}
+    rows = (
+        await session.execute(select(ShopBonus).where(ShopBonus.shop_id.in_(shop_ids)))
+    ).scalars().all()
+    return {b.shop_id: b for b in rows}
 
 
 # --------------------------------------------------------------------------- #
@@ -302,7 +311,11 @@ async def list_invitations(
             or_(func.lower(Invitation.email).like(like), func.lower(Invitation.reference).like(like))
         )
     invitations = (await session.execute(stmt)).scalars().all()
-    return {"items": [invitation_row(i) for i in invitations], "total": len(invitations)}
+    bonus_by_shop = await _bonuses_by_shop(session, {i.shop_id for i in invitations})
+    return {
+        "items": [invitation_row(i, shop_bonus=bonus_by_shop.get(i.shop_id)) for i in invitations],
+        "total": len(invitations),
+    }
 
 
 @router.get("/{invitation_id}")
@@ -315,7 +328,10 @@ async def get_invitation(
     if inv is None:
         raise HTTPException(status_code=404, detail="Invitation not found")
     enforce_campaign_access(inv.campaign, user)
-    return invitation_detail(inv)
+    bonus = (
+        await session.execute(select(ShopBonus).where(ShopBonus.shop_id == inv.shop_id))
+    ).scalar_one_or_none()
+    return invitation_detail(inv, shop_bonus=bonus)
 
 
 @router.get("/{invitation_id}/email")

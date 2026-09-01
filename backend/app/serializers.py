@@ -113,7 +113,26 @@ def shopper_out(s: Shopper) -> dict:
     }
 
 
-def shop_out(shop: Shop) -> dict:
+def shop_bonus_out(bonus) -> Optional[dict]:
+    if bonus is None:
+        return None
+    return {
+        "id": str(bonus.id),
+        "amount": bonus.amount,
+        "currency": bonus.currency,
+        "note": bonus.note,
+        "created_by": bonus.created_by,
+        "created_at": iso(bonus.created_at),
+        "awarded_shopper_name": bonus.awarded_shopper_name,
+        "completed_at": iso(bonus.completed_at),
+        "reminder_sent_at": iso(bonus.reminder_sent_at),
+    }
+
+
+def shop_out(shop: Shop, bonus=None) -> dict:
+    """`bonus` is an optional pre-fetched ShopBonus (or None) — never lazy-
+    loaded here since this runs outside an async context; pass it in from
+    callers that already queried it (see routers/campaigns.py, shops.py)."""
     return {
         "id": str(shop.id),
         "campaign_id": str(shop.campaign_id),
@@ -131,6 +150,7 @@ def shop_out(shop: Shop) -> dict:
         "visit_end": iso(shop.visit_end),
         "status": shop.status,
         "allow_over_selection": shop.allow_over_selection,
+        "bonus": shop_bonus_out(bonus),
     }
 
 
@@ -162,8 +182,12 @@ def event_out(e: InvitationEvent) -> dict:
     }
 
 
-def invitation_row(inv: Invitation) -> dict:
-    """Compact row used by the tracking table (relations must be eager-loaded)."""
+def invitation_row(inv: Invitation, shop_bonus=None) -> dict:
+    """Compact row used by the tracking table (relations must be eager-loaded).
+
+    `shop_bonus` is an optional pre-fetched ShopBonus for `inv.shop_id` —
+    passed in by callers that separately queried it (see routers/invitations.py,
+    campaigns.py), never lazy-loaded here."""
     return {
         "id": str(inv.id),
         "reference": inv.reference,
@@ -173,8 +197,10 @@ def invitation_row(inv: Invitation) -> dict:
         "shopper_email": inv.email,
         "campaign_name": inv.campaign.name if inv.campaign else None,
         "client_name": inv.campaign.client_name if inv.campaign else None,
+        "shop_id": str(inv.shop_id),
         "shop_name": inv.shop.shop_name if inv.shop else None,
         "shop_city": inv.shop.city if inv.shop else None,
+        "shop_status": inv.shop.status if inv.shop else None,
         "status": inv.status,
         "source": inv.source,
         "sent_at": iso(inv.sent_at),
@@ -189,12 +215,13 @@ def invitation_row(inv: Invitation) -> dict:
         "automation_id": str(inv.automation_id) if inv.automation_id else None,
         "automation_name": inv.automation.name if inv.automation_id and inv.automation else None,
         "automation_step": inv.automation_step,
+        "shop_bonus": shop_bonus_out(shop_bonus),
     }
 
 
-def invitation_detail(inv: Invitation) -> dict:
+def invitation_detail(inv: Invitation, shop_bonus=None) -> dict:
     """Full invitation payload including generated URLs, attribution + events."""
-    row = invitation_row(inv)
+    row = invitation_row(inv, shop_bonus=shop_bonus)
     row.update(
         {
             "campaign_id": str(inv.campaign_id),

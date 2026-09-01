@@ -41,6 +41,9 @@ function renderMeta(meta: Record<string, any>) {
   if (meta.provider) chips.push(`via ${meta.provider}`);
   if (meta.utm && typeof meta.utm === "object" && meta.utm.utm_source)
     chips.push(`utm: ${meta.utm.utm_source}`);
+  if (meta.amount) chips.push(`${meta.currency || ""} ${meta.amount}`.trim());
+  if (Array.isArray(meta.recipients) && meta.recipients.length)
+    chips.push(`to ${meta.recipients.join(", ")}`);
   return chips.map((c, i) => (
     <span
       key={i}

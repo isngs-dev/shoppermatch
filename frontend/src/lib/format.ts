@@ -66,6 +66,8 @@ export const EVENT_LABELS: Record<string, string> = {
   email_bounced: "Email Bounced",
   email_failed: "Email Failed",
   email_deferred: "Email Deferred",
+  assignment_completed: "Shop Completed",
+  bonus_reminder_sent: "Bonus Reminder Sent to Client",
 };
 
 export function eventLabel(type: string): string {
@@ -83,6 +85,7 @@ export function statusBadgeClass(status: string): string {
     visited: "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
     accepted: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
     declined: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+    completed: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
     pending: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
   };
   return map[status] || map.created;
@@ -101,6 +104,8 @@ export function eventDotClass(type: string): string {
     email_bounced: "bg-rose-500",
     email_failed: "bg-rose-500",
     email_deferred: "bg-amber-500",
+    assignment_completed: "bg-teal-500",
+    bonus_reminder_sent: "bg-amber-600",
   };
   return map[type] || "bg-slate-400";
 }

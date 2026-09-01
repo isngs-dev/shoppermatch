@@ -7,7 +7,7 @@ import {
   IconSend,
   IconTarget,
 } from "../components/Icons";
-import { Badge, CheckCell, KpiCard, Loading } from "../components/ui";
+import { Badge, CheckCell, KpiCard, Loading, useToast } from "../components/ui";
 import { api } from "../lib/api";
 import { classNames, statusBadgeClass } from "../lib/format";
 import { useApi } from "../lib/useApi";
@@ -21,6 +21,27 @@ export function Tracking() {
   const [clientFilter, setClientFilter] = useState("");
   const [campaignFilter, setCampaignFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const toast = useToast();
+  const [completing, setCompleting] = useState<string | null>(null);
+
+  async function markCompleted(shopId: string, shopName: string) {
+    if (!confirm(`Mark "${shopName}" as completed? This confirms the shop visit happened.`)) return;
+    setCompleting(shopId);
+    try {
+      const res = await api.completeShop(shopId);
+      toast(
+        res.bonus_reminder_sent
+          ? `${shopName} marked completed — bonus reminder emailed to the client.`
+          : `${shopName} marked completed.`,
+        "success"
+      );
+      refresh();
+    } catch (e: any) {
+      toast(e?.message || "Failed to mark shop completed", "error");
+    } finally {
+      setCompleting(null);
+    }
+  }
 
   function refresh() {
     summary.reload();
@@ -115,7 +136,7 @@ export function Tracking() {
             </select>
             <select className="input h-9 w-32" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">All statuses</option>
-              {["created", "sent", "delivered", "opened", "clicked", "visited", "accepted", "declined"].map((st) => (
+              {["created", "sent", "delivered", "opened", "clicked", "visited", "accepted", "declined", "completed"].map((st) => (
                 <option key={st} value={st}>{cap(st)}</option>
               ))}
             </select>
@@ -138,6 +159,7 @@ export function Tracking() {
                 <th className="th">Invitation ID</th>
                 <th className="th">Campaign</th>
                 <th className="th hidden lg:table-cell">Shop</th>
+                <th className="th">Bonus</th>
                 <th className="th hidden xl:table-cell">Client</th>
                 <th className="th hidden md:table-cell">Email</th>
                 <th className="th text-center">Sent</th>
@@ -147,6 +169,7 @@ export function Tracking() {
                 <th className="th hidden lg:table-cell">Source</th>
                 <th className="th hidden xl:table-cell">Automation</th>
                 <th className="th hidden xl:table-cell">Last Event</th>
+                <th className="th text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
@@ -162,6 +185,24 @@ export function Tracking() {
                   <td className="td font-mono text-xs text-slate-500">{r.reference}</td>
                   <td className="td">{r.campaign_name}</td>
                   <td className="td hidden text-slate-500 lg:table-cell">{r.shop_name}</td>
+                  <td className="td">
+                    {r.shop_bonus ? (
+                      <span
+                        className={classNames(
+                          "badge",
+                          r.shop_bonus.completed_at
+                            ? "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300"
+                            : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                        )}
+                        title={r.shop_bonus.note || undefined}
+                      >
+                        💰 {r.shop_bonus.currency} {r.shop_bonus.amount}
+                        {r.shop_bonus.completed_at ? " · Paid out" : " · Pending"}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 dark:text-slate-600">—</span>
+                    )}
+                  </td>
                   <td className="td hidden text-slate-500 xl:table-cell">{r.client_name}</td>
                   <td className="td hidden text-slate-500 md:table-cell">{r.shopper_email}</td>
                   <td className="td text-center"><div className="flex justify-center"><CheckCell on={!!r.sent_at} /></div></td>
@@ -185,11 +226,25 @@ export function Tracking() {
                   <td className="td hidden xl:table-cell">
                     <Badge className={statusBadgeClass(r.status)}>{cap(r.status)}</Badge>
                   </td>
+                  <td className="td text-right">
+                    {r.response === "accepted" && r.shop_status !== "completed" && (
+                      <button
+                        className="btn-secondary h-8 px-3 text-xs"
+                        disabled={completing === r.shop_id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          markCompleted(r.shop_id, r.shop_name || "this shop");
+                        }}
+                      >
+                        {completing === r.shop_id ? "Marking…" : "Mark Completed"}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={13} className="td py-10 text-center text-slate-400">
+                  <td colSpan={15} className="td py-10 text-center text-slate-400">
                     No invitations match your search.
                   </td>
                 </tr>

@@ -183,6 +183,14 @@ export const api = {
     request("/api/client/social-accounts/connect", { method: "POST", body: { platform, account_name: accountName } }),
   disconnectSocialAccount: (platform: string) =>
     request(`/api/client/social-accounts/${platform}`, { method: "DELETE" }),
+  setShopBonus: (campaignId: string, shopId: string, amount: number, note?: string) =>
+    request(`/api/campaigns/${campaignId}/shops/${shopId}/bonus`, {
+      method: "POST",
+      body: { amount, note: note || null },
+    }),
+  removeShopBonus: (campaignId: string, shopId: string) =>
+    request(`/api/campaigns/${campaignId}/shops/${shopId}/bonus`, { method: "DELETE" }),
+  completeShop: (shopId: string) => request(`/api/shops/${shopId}/complete`, { method: "POST" }),
   aiShopRecommendations: (campaignId: string, shopId: string, params?: Record<string, any>) =>
     request(`/api/campaigns/${campaignId}/shops/${shopId}/recommendations` + qs(params)),
   approveAiRecommendations: (campaignId: string, shopId: string, shopperIds: string[]) =>

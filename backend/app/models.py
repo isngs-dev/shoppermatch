@@ -209,6 +209,9 @@ class Shop(Base):
     allow_over_selection: Mapped[bool] = mapped_column(Boolean, default=False)
 
     campaign: Mapped["Campaign"] = relationship(back_populates="shops")
+    bonus: Mapped["ShopBonus | None"] = relationship(
+        back_populates="shop", cascade="all, delete-orphan", uselist=False
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -654,6 +657,41 @@ class ClientSocialAccount(Base):
     client: Mapped["Client"] = relationship()
 
 
+# --------------------------------------------------------------------------- #
+# Client-funded bonus money for unfilled shops (conceptual/demo — the slide
+# is explicit that ShopperMatch never processes this payment; it only tracks
+# the pledge, surfaces it to ISN ops, and reminds the client once it's due).
+# One bonus per shop: the client sets it while the shop is still open, and
+# whichever shopper's invitation is the first to be marked completed for
+# that shop claims it.
+# --------------------------------------------------------------------------- #
+class ShopBonus(Base):
+    __tablename__ = "shop_bonuses"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    shop_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("shops.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    campaign_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
+    amount: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(8), default="INR")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    # Set once an ISN admin marks the shop completed and an accepted
+    # invitation exists to award it to — see routers/shops.py::complete_shop.
+    awarded_invitation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("invitations.id", ondelete="SET NULL"), nullable=True
+    )
+    awarded_shopper_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    shop: Mapped["Shop"] = relationship(back_populates="bonus")
+    campaign: Mapped["Campaign"] = relationship()
+
+
 # Event type + status constants (kept in one place for reuse across the app).
 class EventType:
     INVITATION_CREATED = "invitation_created"
@@ -668,6 +706,8 @@ class EventType:
     EMAIL_BOUNCED = "email_bounced"
     EMAIL_FAILED = "email_failed"
     EMAIL_DEFERRED = "email_deferred"
+    ASSIGNMENT_COMPLETED = "assignment_completed"
+    BONUS_REMINDER_SENT = "bonus_reminder_sent"
 
 
 class InvitationStatus:
@@ -679,6 +719,7 @@ class InvitationStatus:
     VISITED = "visited"
     ACCEPTED = "accepted"
     DECLINED = "declined"
+    COMPLETED = "completed"
 
     # Ordered ranking used so status only ever moves forward.
     ORDER = {
@@ -690,6 +731,7 @@ class InvitationStatus:
         VISITED: 5,
         ACCEPTED: 6,
         DECLINED: 6,
+        COMPLETED: 7,
     }
 
 

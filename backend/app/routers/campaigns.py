@@ -18,8 +18,8 @@ from sqlalchemy.orm import selectinload
 
 from ..database import get_session
 from ..deps import require_operator
-from ..models import Campaign, ClientSocialAccount, DistributionPost, EventType, Invitation, Shop, Shopper, User
-from ..serializers import campaign_out, invitation_row, iso, shop_out, shopper_out
+from ..models import Campaign, ClientSocialAccount, DistributionPost, EventType, Invitation, Shop, ShopBonus, Shopper, User
+from ..serializers import campaign_out, invitation_row, iso, shop_bonus_out, shop_out, shopper_out
 from ..services.audit import record_audit
 from ..services.distribution import DESTINATION_TYPES, destination_name, generate_post_image, regions_for_shops
 from ..services.selection import enforce_over_selection
@@ -86,9 +86,13 @@ async def _campaign_shops_with_coverage(session: AsyncSession, campaign_id) -> l
             )
         ).all()
     )
+    bonus_rows = (
+        await session.execute(select(ShopBonus).where(ShopBonus.campaign_id == campaign_id))
+    ).scalars().all()
+    bonus_by_shop = {b.shop_id: b for b in bonus_rows}
     items = []
     for s in shops:
-        d = shop_out(s)
+        d = shop_out(s, bonus=bonus_by_shop.get(s.id))
         invited = int(counts.get(s.id, 0))
         ratio = (invited / s.required_shoppers) if s.required_shoppers else 0
         d["invited_shoppers"] = invited
@@ -306,6 +310,94 @@ async def campaign_outreach_endpoint(
     return await _campaign_outreach(session, campaign_id)
 
 
+# --------------------------------------------------------------------------- #
+# Client-funded bonus money for unfilled shops (conceptual/demo — see
+# models.py::ShopBonus). Set from Outreach on a shop that isn't filled yet;
+# ShopperMatch never processes the payment itself, only tracks the pledge —
+# ISN ops sees it appear on the Tracking page, and completing the shop
+# (routers/shops.py::complete_shop) is what emails the client a reminder.
+# --------------------------------------------------------------------------- #
+class ShopBonusRequest(BaseModel):
+    amount: int = Field(gt=0, le=10_000_000)
+    note: str | None = Field(default=None, max_length=500)
+
+
+@router.post("/{campaign_id}/shops/{shop_id}/bonus")
+async def set_shop_bonus(
+    campaign_id: uuid.UUID,
+    shop_id: uuid.UUID,
+    body: ShopBonusRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    campaign = await _require_campaign(session, campaign_id, user)
+    shop = await session.get(Shop, shop_id)
+    if shop is None or shop.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Shop not found in this campaign")
+
+    bonus = (
+        await session.execute(select(ShopBonus).where(ShopBonus.shop_id == shop_id))
+    ).scalar_one_or_none()
+    if bonus is not None and bonus.completed_at is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="This shop's bonus has already been awarded and can no longer be edited.",
+        )
+
+    is_new = bonus is None
+    if is_new:
+        bonus = ShopBonus(shop_id=shop_id, campaign_id=campaign_id, created_by=user.email)
+        session.add(bonus)
+    bonus.amount = body.amount
+    bonus.currency = shop.currency
+    bonus.note = body.note
+    bonus.created_by = user.email
+
+    await record_audit(
+        session,
+        action="shop.bonus_added" if is_new else "shop.bonus_updated",
+        actor=user.email,
+        entity_type="shop",
+        entity_id=str(shop.id),
+        summary=f"{user.email} {'set' if is_new else 'updated'} a {shop.currency} {body.amount} bonus for {shop.shop_name} ({campaign.name})",
+        meta={"campaign": campaign.name, "shop": shop.shop_name, "amount": body.amount, "currency": shop.currency},
+    )
+    await session.commit()
+    return shop_bonus_out(bonus)
+
+
+@router.delete("/{campaign_id}/shops/{shop_id}/bonus")
+async def remove_shop_bonus(
+    campaign_id: uuid.UUID,
+    shop_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    campaign = await _require_campaign(session, campaign_id, user)
+    bonus = (
+        await session.execute(
+            select(ShopBonus).where(ShopBonus.shop_id == shop_id, ShopBonus.campaign_id == campaign_id)
+        )
+    ).scalar_one_or_none()
+    if bonus is None:
+        raise HTTPException(status_code=404, detail="No bonus set for this shop")
+    if bonus.completed_at is not None:
+        raise HTTPException(status_code=400, detail="This bonus has already been awarded and can no longer be removed.")
+    shop = await session.get(Shop, shop_id)
+    await record_audit(
+        session,
+        action="shop.bonus_removed",
+        actor=user.email,
+        entity_type="shop",
+        entity_id=str(shop_id),
+        summary=f"{user.email} removed the bonus for {shop.shop_name if shop else shop_id} ({campaign.name})",
+        meta={"campaign": campaign.name},
+    )
+    await session.delete(bonus)
+    await session.commit()
+    return {"removed": True}
+
+
 @router.get("/{campaign_id}/tracking")
 async def campaign_tracking(
     campaign_id: uuid.UUID,
@@ -326,7 +418,17 @@ async def campaign_tracking(
         )
     )
     invitations = (await session.execute(stmt)).scalars().all()
-    return {"items": [invitation_row(i) for i in invitations], "total": len(invitations)}
+    shop_ids = {i.shop_id for i in invitations}
+    bonus_by_shop = {}
+    if shop_ids:
+        bonus_rows = (
+            await session.execute(select(ShopBonus).where(ShopBonus.shop_id.in_(shop_ids)))
+        ).scalars().all()
+        bonus_by_shop = {b.shop_id: b for b in bonus_rows}
+    return {
+        "items": [invitation_row(i, shop_bonus=bonus_by_shop.get(i.shop_id)) for i in invitations],
+        "total": len(invitations),
+    }
 
 
 @router.get("/{campaign_id}/insights")

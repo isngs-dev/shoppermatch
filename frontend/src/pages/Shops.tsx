@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Badge, Loading } from "../components/ui";
 import { api } from "../lib/api";
-import { fmtDate, fmtMoney, statusBadgeClass } from "../lib/format";
+import { classNames, fmtDate, fmtMoney, statusBadgeClass } from "../lib/format";
 import { useApi } from "../lib/useApi";
 import { ErrorBox } from "./Dashboard";
 
@@ -43,6 +43,7 @@ export function Shops() {
                 <th className="th text-center">Shoppers</th>
                 <th className="th hidden lg:table-cell">Visit window</th>
                 <th className="th">Status</th>
+                <th className="th">Bonus</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
@@ -65,15 +66,35 @@ export function Shops() {
                     {fmtDate(s.visit_start)} – {fmtDate(s.visit_end)}
                   </td>
                   <td className="td">
-                    <Badge className={statusBadgeClass(s.status === "open" ? "sent" : "created")}>
+                    <Badge className={statusBadgeClass(s.status === "open" ? "sent" : s.status === "completed" ? "completed" : "created")}>
                       {s.status}
                     </Badge>
+                  </td>
+                  <td className="td">
+                    {s.bonus ? (
+                      <span
+                        className={classNames(
+                          "badge",
+                          s.bonus.completed_at
+                            ? "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300"
+                            : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                        )}
+                        title={s.bonus.note || undefined}
+                      >
+                        💰 {fmtMoney(s.bonus.amount, s.bonus.currency)}
+                        {s.bonus.completed_at
+                          ? ` · Awarded to ${s.bonus.awarded_shopper_name || "shopper"}`
+                          : " · Pending"}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 dark:text-slate-600">—</span>
+                    )}
                   </td>
                 </tr>
               ))}
               {shops.data.items.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="td py-10 text-center text-slate-400">
+                  <td colSpan={8} className="td py-10 text-center text-slate-400">
                     No shops found.
                   </td>
                 </tr>
