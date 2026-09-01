@@ -7,7 +7,7 @@ import { CampaignMapTab, ShopDetailDrawer } from "../components/ShopMap";
 import { IconClock, IconMail, IconSend, IconSparkles, IconTarget, IconUsers } from "../components/Icons";
 import { Avatar, Badge, CheckCell, EmptyState, KpiCard, Loading, Spinner, useToast } from "../components/ui";
 import { api } from "../lib/api";
-import { classNames, fmtDate, statusBadgeClass } from "../lib/format";
+import { classNames, fmtDate, fmtMoney, statusBadgeClass } from "../lib/format";
 import { useApi } from "../lib/useApi";
 import { ErrorBox } from "./Dashboard";
 
@@ -376,6 +376,7 @@ function RecommendationsTab({
   const [profileFor, setProfileFor] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [togglingOverSelection, setTogglingOverSelection] = useState(false);
+  const [bonusShop, setBonusShop] = useState<any | null>(null);
   const toast = useToast();
 
   const shopDetail = useApi(() => (shopId ? api.shop(shopId) : Promise.resolve(null)), [shopId]);
@@ -521,6 +522,31 @@ function RecommendationsTab({
         <ContextField label="Required Shoppers" value={required} />
         <ContextField label="Search Radius" value={`${radius} km`} />
       </div>
+
+      {selectedShop && (
+        <div className="card flex flex-wrap items-center justify-between gap-3 p-4">
+          <div>
+            <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+              Bonus for {selectedShop.shop_name}
+            </div>
+            {selectedShop.bonus ? (
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                💰 {fmtMoney(selectedShop.bonus.amount, selectedShop.bonus.currency)}
+                {selectedShop.bonus.completed_at
+                  ? ` — awarded to ${selectedShop.bonus.awarded_shopper_name || "shopper"}`
+                  : " — pending, funded by you, paid outside ShopperMatch"}
+              </div>
+            ) : (
+              <div className="mt-1 text-xs text-slate-400">
+                No bonus set — an extra incentive can help fill this shop faster.
+              </div>
+            )}
+          </div>
+          <button className="btn-secondary" onClick={() => setBonusShop(selectedShop)}>
+            {selectedShop.bonus ? "Edit Bonus" : "+ Add Bonus"}
+          </button>
+        </div>
+      )}
 
       {/* Right at the top of the page, above Auto Assign / Outreach
           Prioritization / the controls — this is the most actionable thing
@@ -744,6 +770,139 @@ function RecommendationsTab({
 
       {breakdownFor && <BreakdownModal r={breakdownFor} shopId={shopId} onClose={() => setBreakdownFor(null)} />}
       {profileFor && <ShopperDrawer shopperId={profileFor} onClose={() => setProfileFor(null)} />}
+      {bonusShop && (
+        <BonusModal
+          shop={bonusShop}
+          campaignId={campaignId}
+          onClose={() => setBonusShop(null)}
+          onSaved={() => shops.reload()}
+        />
+      )}
+    </div>
+  );
+}
+
+// Client-funded bonus money for a shop that isn't filled yet (see
+// backend/app/models.py::ShopBonus). ShopperMatch never processes this
+// payment — it just tracks the pledge and, once ISN marks the shop
+// completed, emails a reminder to pay whichever shopper did it.
+function BonusModal({
+  shop,
+  campaignId,
+  onClose,
+  onSaved,
+}: {
+  shop: any;
+  campaignId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const existing = shop.bonus;
+  const [amount, setAmount] = useState(existing ? String(existing.amount) : "");
+  const [note, setNote] = useState(existing?.note || "");
+  const [busy, setBusy] = useState(false);
+  const awarded = !!existing?.completed_at;
+
+  async function save() {
+    const n = Number(amount);
+    if (!n || n <= 0) {
+      toast("Enter a bonus amount greater than 0", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.setShopBonus(campaignId, shop.id, Math.round(n), note.trim() || undefined);
+      toast(`Bonus of ${fmtMoney(Math.round(n), shop.currency)} set for ${shop.shop_name}`, "success");
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      toast(e?.message || "Failed to save bonus", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setBusy(true);
+    try {
+      await api.removeShopBonus(campaignId, shop.id);
+      toast(`Bonus removed for ${shop.shop_name}`, "success");
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      toast(e?.message || "Failed to remove bonus", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">
+            {existing ? "Edit Bonus" : "Add Bonus"} — {shop.shop_name}
+          </h3>
+          <button className="btn-ghost" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </div>
+
+        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+          Extra incentive on top of standard compensation, funded and paid by you directly to the shopper —
+          ShopperMatch does not process this payment. Whichever shopper completes this shop receives it, and
+          you'll get an email reminder once ISN confirms the shop is done.
+        </p>
+
+        {awarded ? (
+          <div className="mt-4 rounded-lg bg-teal-50 px-3 py-2 text-sm text-teal-700 dark:bg-teal-950/40 dark:text-teal-300">
+            This bonus was already awarded to {existing.awarded_shopper_name || "a shopper"} and can no longer be
+            edited.
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            <div>
+              <label className="label">Bonus amount ({shop.currency})</label>
+              <input
+                className="input"
+                type="number"
+                min={1}
+                autoFocus
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="e.g. 500"
+              />
+            </div>
+            <div>
+              <label className="label">Note (optional)</label>
+              <input
+                className="input"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="e.g. For a same-week visit"
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="mt-5 flex justify-end gap-2">
+          {existing && !awarded && (
+            <button className="btn-secondary mr-auto text-rose-600 dark:text-rose-400" onClick={remove} disabled={busy}>
+              Remove
+            </button>
+          )}
+          <button className="btn-secondary" onClick={onClose}>
+            {awarded ? "Close" : "Cancel"}
+          </button>
+          {!awarded && (
+            <button className="btn-primary" onClick={save} disabled={busy}>
+              {busy ? <Spinner /> : null} Save Bonus
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

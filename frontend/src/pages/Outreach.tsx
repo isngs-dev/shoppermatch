@@ -5,7 +5,7 @@ import { InvitationDrawer } from "../components/InvitationDrawer";
 import { IconCursor, IconMail, IconSend, IconTarget, IconX } from "../components/Icons";
 import { Badge, CopyButton, KpiCard, Loading, Spinner, useToast } from "../components/ui";
 import { api } from "../lib/api";
-import { classNames, fmtDateTime, fmtMoney, statusBadgeClass } from "../lib/format";
+import { classNames, fmtDateTime, statusBadgeClass } from "../lib/format";
 import { useApi } from "../lib/useApi";
 
 // --------------------------- Built-in templates --------------------------- //
@@ -228,7 +228,6 @@ export function Outreach() {
   const [shopperId, setShopperId] = useState("");
   const [recipientEmail, setRecipientEmail] = useState("");
   const [shops, setShops] = useState<any[]>([]);
-  const [bonusShop, setBonusShop] = useState<any | null>(null);
   const [templateKey, setTemplateKey] = useState("standard");
   const [subject, setSubject] = useState(builtinTemplates("active").standard.subject);
   const [body, setBody] = useState(builtinTemplates("active").standard.body);
@@ -386,13 +385,6 @@ export function Outreach() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId]);
-
-  // Refreshes just the shop list (bonus badges etc.) without resetting the
-  // current shop selection — used after adding/removing a bonus.
-  function reloadShops() {
-    if (!campaignId) return;
-    api.campaignShops(campaignId).then((r) => setShops(r.items));
-  }
 
   // Force a fresh top-candidate pick whenever the shop changes (campaign
   // switch or a direct dropdown pick) — otherwise a shopper who's merely a
@@ -1049,24 +1041,6 @@ export function Outreach() {
                           {s.shop_name} — {s.city}
                         </span>
                         <span className="shrink-0 text-xs text-slate-400">requires {s.required_shoppers}</span>
-                        <button
-                          type="button"
-                          className={classNames(
-                            "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                            s.bonus
-                              ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
-                              : "bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700"
-                          )}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setBonusShop(s);
-                          }}
-                        >
-                          {s.bonus
-                            ? `💰 ${fmtMoney(s.bonus.amount, s.bonus.currency)}${s.bonus.completed_at ? " · Paid" : ""}`
-                            : "+ Bonus"}
-                        </button>
                       </label>
                     ))}
                   </div>
@@ -1459,140 +1433,6 @@ export function Outreach() {
           />
         </ConfirmModal>
       )}
-
-      {bonusShop && (
-        <BonusModal
-          shop={bonusShop}
-          campaignId={campaignId}
-          onClose={() => setBonusShop(null)}
-          onSaved={reloadShops}
-        />
-      )}
-    </div>
-  );
-}
-
-// Client-funded bonus money for a shop that isn't filled yet (see
-// backend/app/models.py::ShopBonus). ShopperMatch never processes this
-// payment — it just tracks the pledge and, once ISN marks the shop
-// completed, emails a reminder to pay whichever shopper did it.
-function BonusModal({
-  shop,
-  campaignId,
-  onClose,
-  onSaved,
-}: {
-  shop: any;
-  campaignId: string;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const toast = useToast();
-  const existing = shop.bonus;
-  const [amount, setAmount] = useState(existing ? String(existing.amount) : "");
-  const [note, setNote] = useState(existing?.note || "");
-  const [busy, setBusy] = useState(false);
-  const awarded = !!existing?.completed_at;
-
-  async function save() {
-    const n = Number(amount);
-    if (!n || n <= 0) {
-      toast("Enter a bonus amount greater than 0", "error");
-      return;
-    }
-    setBusy(true);
-    try {
-      await api.setShopBonus(campaignId, shop.id, Math.round(n), note.trim() || undefined);
-      toast(`Bonus of ${fmtMoney(Math.round(n), shop.currency)} set for ${shop.shop_name}`, "success");
-      onSaved();
-      onClose();
-    } catch (e: any) {
-      toast(e?.message || "Failed to save bonus", "error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove() {
-    setBusy(true);
-    try {
-      await api.removeShopBonus(campaignId, shop.id);
-      toast(`Bonus removed for ${shop.shop_name}`, "success");
-      onSaved();
-      onClose();
-    } catch (e: any) {
-      toast(e?.message || "Failed to remove bonus", "error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900">
-        <div className="flex items-center justify-between">
-          <h3 className="text-base font-bold text-slate-900 dark:text-white">
-            {existing ? "Edit Bonus" : "Add Bonus"} — {shop.shop_name}
-          </h3>
-          <button className="btn-ghost" onClick={onClose} aria-label="Close">
-            <IconX />
-          </button>
-        </div>
-
-        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-          Extra incentive on top of standard compensation, funded and paid by you directly to the shopper —
-          ShopperMatch does not process this payment. Whichever shopper completes this shop receives it, and
-          you'll get an email reminder once ISN confirms the shop is done.
-        </p>
-
-        {awarded ? (
-          <div className="mt-4 rounded-lg bg-teal-50 px-3 py-2 text-sm text-teal-700 dark:bg-teal-950/40 dark:text-teal-300">
-            This bonus was already awarded to {existing.awarded_shopper_name || "a shopper"} and can no longer be
-            edited.
-          </div>
-        ) : (
-          <div className="mt-4 space-y-3">
-            <div>
-              <label className="label">Bonus amount ({shop.currency})</label>
-              <input
-                className="input"
-                type="number"
-                min={1}
-                autoFocus
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="e.g. 500"
-              />
-            </div>
-            <div>
-              <label className="label">Note (optional)</label>
-              <input
-                className="input"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="e.g. For a same-week visit"
-              />
-            </div>
-          </div>
-        )}
-
-        <div className="mt-5 flex justify-end gap-2">
-          {existing && !awarded && (
-            <button className="btn-secondary mr-auto text-rose-600 dark:text-rose-400" onClick={remove} disabled={busy}>
-              Remove
-            </button>
-          )}
-          <button className="btn-secondary" onClick={onClose}>
-            {awarded ? "Close" : "Cancel"}
-          </button>
-          {!awarded && (
-            <button className="btn-primary" onClick={save} disabled={busy}>
-              {busy ? <Spinner /> : null} Save Bonus
-            </button>
-          )}
-        </div>
-      </div>
     </div>
   );
 }
