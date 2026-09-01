@@ -57,7 +57,7 @@ const SILENT_WAV =
 type Status = "off" | "listening" | "recording" | "thinking" | "speaking" | "error";
 type ChatMessage = { role: "user" | "assistant"; content: string };
 type PendingConfirm = {
-  name: "send_campaign_invitations" | "start_campaign_automation" | "post_distribution";
+  name: "send_campaign_invitations" | "start_campaign_automation" | "post_distribution" | "edit_email_template";
   arguments: any;
 };
 type Draft = { subject: string; body: string };
@@ -175,10 +175,11 @@ export function ClientVoiceAssistant() {
       return { ...cached.data, current_page: locationRef.current };
     }
     try {
-      const [dashboard, active, upcoming] = await Promise.all([
+      const [dashboard, active, upcoming, templates] = await Promise.all([
         api.clientDashboard(),
         api.campaigns({ status: "active" }),
         api.campaigns({ status: "upcoming" }),
+        api.emailTemplates().catch(() => ({ items: [] })),
       ]);
       const data = {
         dashboard_summary: dashboard,
@@ -188,6 +189,7 @@ export function ClientVoiceAssistant() {
           bucket: c.bucket,
           progress: c.progress,
         })),
+        email_templates: (templates.items || []).map((t: any) => t.name),
       };
       contextCacheRef.current = { data, at: Date.now() };
       return { ...data, current_page: locationRef.current };
@@ -232,7 +234,14 @@ export function ClientVoiceAssistant() {
       api.campaigns({ status: "upcoming" }),
     ]);
     const all = [...(activeRes.items || []), ...(upcomingRes.items || [])];
-    return all.find((c: any) => c.name.toLowerCase().includes(campaignName.toLowerCase())) || null;
+    const needle = campaignName.toLowerCase();
+    // Exact match must win over substring — e.g. "Nike Mumbai Store Audit"
+    // vs. a shorter campaign name that happens to be contained in it.
+    return (
+      all.find((c: any) => c.name.toLowerCase() === needle) ||
+      all.find((c: any) => c.name.toLowerCase().includes(needle)) ||
+      null
+    );
   }
 
   async function executeConfirmedSend(campaignName: string) {
@@ -330,6 +339,74 @@ export function ClientVoiceAssistant() {
       }
     } catch (e: any) {
       await respondAndSpeak(e?.message || "Sorry, something went wrong posting that.");
+    }
+  }
+
+  async function resolveTemplate(templateName: string): Promise<any | null> {
+    const res = await api.emailTemplates();
+    const items = res.items || [];
+    const needle = templateName.toLowerCase();
+    // An exact match must win over a substring match — otherwise asking for
+    // "Reminder" can silently resolve to "Final Reminder" just because it
+    // happens to sort first and also contains the word "reminder".
+    return (
+      items.find((t: any) => t.name.toLowerCase() === needle) ||
+      items.find((t: any) => t.name.toLowerCase().includes(needle)) ||
+      null
+    );
+  }
+
+  function textToHtml(text: string): string {
+    const escaped = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    return escaped.replace(/\n/g, "<br>");
+  }
+
+  async function executeEditTemplate(templateName: string, subject?: string, body?: string) {
+    try {
+      const template = await resolveTemplate(templateName);
+      if (!template) {
+        await respondAndSpeak(`I couldn't find a template called ${templateName}.`);
+        return;
+      }
+      const patch: Record<string, any> = {};
+      if (subject) patch.subject = subject;
+      if (body) patch.html_body = textToHtml(body);
+      if (Object.keys(patch).length === 0) {
+        await respondAndSpeak(`I don't have any changes to save for ${template.name}.`);
+        return;
+      }
+      await api.updateEmailTemplate(template.id, patch);
+      toast(`Voice assistant: updated the ${template.name} template.`, "success");
+      await respondAndSpeak(`Updated the ${template.name} template.`);
+    } catch (e: any) {
+      await respondAndSpeak(e?.message || "Sorry, something went wrong saving that template.");
+    }
+  }
+
+  // Called from performAction, which already pushed the backend's default
+  // reply ("Downloading the ... report for ...") into the chat — so the
+  // success path just needs to speak it, matching that text. Only the error
+  // paths (campaign not found, export failed) need to correct the message
+  // in place, since the backend can't know client-side whether the named
+  // campaign actually resolves to one this client owns.
+  async function executeExportReport(campaignName: string, format: "pdf" | "csv" | "xlsx", replyText: string) {
+    try {
+      const campaign = await resolveCampaign(campaignName);
+      if (!campaign) {
+        const correction = `I couldn't find a campaign called ${campaignName}.`;
+        replaceLastAssistantMessage(correction);
+        await speak(correction);
+        return;
+      }
+      await api.exportClientCampaignReport(campaign.id, format, campaign.name);
+      await speak(replyText);
+    } catch (e: any) {
+      const correction = e?.message || "Sorry, something went wrong exporting that report.";
+      replaceLastAssistantMessage(correction);
+      await speak(correction);
     }
   }
 
@@ -440,6 +517,21 @@ export function ClientVoiceAssistant() {
           pendingConfirmRef.current = { name: "start_campaign_automation", arguments: action.arguments };
           await speak(`Just to confirm — you want an email automation started for ${action.arguments?.campaign_name}. Say confirm to go ahead.`);
           return;
+        case "propose_edit_email_template":
+          pendingConfirmRef.current = { name: "edit_email_template", arguments: action.arguments };
+          await speak(replyText);
+          return;
+        case "edit_email_template":
+          // Safety net: same pattern as every other real write — never save
+          // straight off the first utterance even if the model tried to.
+          pendingConfirmRef.current = { name: "edit_email_template", arguments: action.arguments };
+          await speak(`Just to confirm — save these changes to the ${action.arguments?.template_name} template? Say confirm to go ahead.`);
+          return;
+        case "export_campaign_report": {
+          const format = (action.arguments?.format || "pdf") as "pdf" | "csv" | "xlsx";
+          await executeExportReport(action.arguments?.campaign_name || "", format, replyText);
+          return;
+        }
         case "toggle_theme":
           if (action.arguments?.mode && action.arguments.mode !== theme) toggleTheme();
           await speak(replyText);
@@ -479,6 +571,12 @@ export function ClientVoiceAssistant() {
             await executeConfirmedSend(pending.arguments?.campaign_name || "");
           } else if (pending.name === "start_campaign_automation") {
             await executeStartAutomation(pending.arguments?.campaign_name || "");
+          } else if (pending.name === "edit_email_template") {
+            await executeEditTemplate(
+              pending.arguments?.template_name || "",
+              pending.arguments?.subject,
+              pending.arguments?.body
+            );
           } else {
             await executePostDistribution(pending.arguments?.campaign_name || "");
           }

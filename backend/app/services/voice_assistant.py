@@ -260,6 +260,68 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "propose_edit_email_template",
+            "description": (
+                "First step of editing one of the client's SAVED, reusable email templates (the "
+                "Templates list under Email Automation/Outreach — distinct from a one-off "
+                "draft_email draft). Use when the client names an existing template, e.g. 'edit the "
+                "Standard Invitation template's subject to ...', 'update the Reminder template body'. "
+                "Include the full new subject and/or body text you intend to save, and ask the client "
+                "to confirm out loud before edit_email_template actually saves it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "template_name": {"type": "string", "description": "Name (or close match) of the template, from the provided context."},
+                    "subject": {"type": "string", "description": "New subject line, if changing it."},
+                    "body": {"type": "string", "description": "New body text (plain text — no HTML), if changing it."},
+                },
+                "required": ["template_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_email_template",
+            "description": (
+                "Saves the edit to an existing email template. Only call this once the client has "
+                "clearly confirmed after propose_edit_email_template — repeat the same template_name/"
+                "subject/body arguments."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "template_name": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+                "required": ["template_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_campaign_report",
+            "description": (
+                "Downloads a campaign report for the client — e.g. 'export the Nike Mumbai report as "
+                "PDF', 'download a CSV of that campaign's report'. Non-destructive read-only download, "
+                "so call it directly without confirmation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "campaign_name": {"type": "string"},
+                    "format": {"type": "string", "enum": ["pdf", "csv", "xlsx"], "description": "Defaults to pdf if not specified."},
+                },
+                "required": ["campaign_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "toggle_theme",
             "description": "Switch the UI between light and dark mode.",
             "parameters": {
@@ -324,6 +386,13 @@ Rules:
   the caption directly in your reply). Actually publishing it goes through \
   propose_post_distribution -> post_distribution, same propose-then-confirm \
   pattern as every other send in this app.
+- Editing a SAVED, reusable email template (not a one-off draft — the client \
+  will name it, e.g. "edit the Standard Invitation template") goes through \
+  propose_edit_email_template -> edit_email_template, same propose-then-\
+  confirm pattern, carrying the full new subject/body in both calls. Template \
+  names available are listed in the context.
+- Exporting/downloading a campaign report (`export_campaign_report`) is \
+  read-only and non-destructive — call it directly, no confirmation needed.
 - If they want to stop the assistant, call `disable_assistant`.
 - Keep replies short — one or two sentences — EXCEPT when returning an email \
   draft, where the full subject/body belongs in the tool arguments.
@@ -437,6 +506,14 @@ def _default_reply_for(name: str, arguments: dict[str, Any]) -> str:
         return f"I'll start an email automation sequence to every shopper across {campaign}. Say confirm to go ahead."
     if name == "start_campaign_automation":
         return f"Starting the email automation for {arguments.get('campaign_name', 'the campaign')} now."
+    if name == "propose_edit_email_template":
+        template = arguments.get("template_name", "that template")
+        return f"I'll update the {template} template. Say confirm to save it."
+    if name == "edit_email_template":
+        return f"Saving changes to the {arguments.get('template_name', 'template')} now."
+    if name == "export_campaign_report":
+        fmt = (arguments.get("format") or "pdf").upper()
+        return f"Downloading the {fmt} report for {arguments.get('campaign_name', 'that campaign')}."
     if name == "toggle_theme":
         return f"Switching to {arguments.get('mode', 'the other')} mode."
     if name == "disable_assistant":
@@ -455,6 +532,16 @@ def _history_text_for(name: str, arguments: dict[str, Any], reply_text: str) -> 
         campaign = arguments.get("campaign_name", "")
         message = arguments.get("message", "")
         return f"Drafted distribution post for {campaign}:\n{message}"
+    if name == "propose_edit_email_template":
+        template = arguments.get("template_name", "")
+        subject = arguments.get("subject")
+        body = arguments.get("body")
+        parts = [f"Proposed template edit for {template}:"]
+        if subject:
+            parts.append(f"Subject: {subject}")
+        if body:
+            parts.append(body)
+        return "\n".join(parts)
     return reply_text
 
 
