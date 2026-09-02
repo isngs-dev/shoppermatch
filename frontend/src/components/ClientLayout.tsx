@@ -19,6 +19,7 @@ const PRIMARY_NAV = [
   { to: "/client/dashboard", label: "Dashboard" },
   { to: "/client/campaigns", label: "Campaigns" },
   { to: "/client/email-automation", label: "Email Automation" },
+  { to: "/client/social-media", label: "Social Media" },
   { to: "/client/insights", label: "Insights" },
   { to: "/client/reports", label: "Reports" },
 ];

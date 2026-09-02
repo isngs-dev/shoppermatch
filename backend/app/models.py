@@ -208,6 +208,15 @@ class Shop(Base):
     # can select more than the required number and under what configuration").
     allow_over_selection: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # ---- Social Media Automation Rules (migration 0018) ----
+    # Shop had no creation timestamp at all before this — needed so a
+    # "when a new shop is added" automation rule can tell a genuinely new
+    # shop apart from one that existed before the rule did (see
+    # services/social_automation.py). Nullable-safe default: existing rows
+    # retrofit to their table's own creation moment via database.py, not a
+    # fabricated one.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
     campaign: Mapped["Campaign"] = relationship(back_populates="shops")
     bonus: Mapped["ShopBonus | None"] = relationship(
         back_populates="shop", cascade="all, delete-orphan", uselist=False
@@ -488,6 +497,21 @@ class EmailAutomation(Base):
     # this instant (upcoming-campaign pre-configuration, spec section 13).
     scheduled_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # ---- AI Voice Call Follow-Up (migration 0019) ----
+    # "Automated Shopper Outreach & Follow-Up" step 07: once a shopper's
+    # ShopperAutomationState reaches COMPLETED_NO_RESPONSE (exhausted every
+    # email step, no reply), optionally place a real outbound phone call —
+    # see services/voice_call.py. Off by default: the email sequence's own
+    # behavior is completely unchanged unless a client explicitly opts in.
+    voice_call_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Days to wait after the LAST follow-up email goes unanswered before the
+    # first call attempt — gives the shopper a chance to reply by email first.
+    voice_call_delay_days: Mapped[int] = mapped_column(Integer, default=2)
+    # Gap between retry attempts if a call goes unanswered (not "declined" —
+    # an actual no-pickup/voicemail).
+    voice_call_retry_gap_days: Mapped[int] = mapped_column(Integer, default=3)
+    voice_call_max_attempts: Mapped[int] = mapped_column(Integer, default=2)
+
     created_by: Mapped[str] = mapped_column(String(255), default="system")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -546,9 +570,24 @@ class ShopperAutomationState(Base):
     last_email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    # ---- AI Voice Call Follow-Up (migration 0019) ----
+    # NULL until this state reaches COMPLETED_NO_RESPONSE on an automation
+    # with voice_call_enabled — see services/voice_call_scheduler.py.
+    # queued -> calling -> completed | no_answer | failed | opted_out
+    voice_call_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    voice_call_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    voice_call_next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # interested | not_interested | undecided | voicemail — set once a call
+    # actually connects and the conversation concludes (services/voice_call_ai.py).
+    voice_call_outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    voice_call_last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     automation: Mapped["EmailAutomation"] = relationship(back_populates="shopper_states")
     shopper: Mapped["Shopper"] = relationship()
     shop: Mapped["Shop | None"] = relationship()
+    voice_calls: Mapped[list["VoiceCallLog"]] = relationship(
+        back_populates="automation_state", cascade="all, delete-orphan", order_by="VoiceCallLog.attempted_at"
+    )
 
     __table_args__ = (
         UniqueConstraint("automation_id", "shopper_id", name="uq_automation_shopper"),
@@ -564,6 +603,34 @@ class ShopperAutomationStatus:
     COMPLETED_NO_RESPONSE = "completed_no_response"  # exhausted all steps, nothing
     COMPLETED_BOUNCED = "completed_bounced"
     COMPLETED_FAILED = "completed_failed"  # provider permanently failed to send
+
+
+# --------------------------------------------------------------------------- #
+# AI Voice Call Follow-Up — one row per outbound call attempt (retries each
+# get their own row, unlike ShopperAutomationState.voice_call_* which only
+# ever reflects the latest attempt). See services/voice_call.py (Twilio) and
+# services/voice_call_ai.py (the GPT-driven conversation). Transcript is a
+# JSON list of {role, text} turns — never contains anything Twilio considers
+# a credential; the auth token itself lives only in settings/env, never here.
+# --------------------------------------------------------------------------- #
+class VoiceCallLog(Base):
+    __tablename__ = "voice_call_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    automation_state_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("shopper_automation_states.id", ondelete="CASCADE"), index=True
+    )
+    external_call_sid: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # queued | ringing | in-progress | completed | busy | no-answer | failed
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)  # interested|not_interested|undecided|voicemail
+    transcript: Mapped[list] = mapped_column(json_col(), default=list)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    automation_state: Mapped["ShopperAutomationState"] = relationship(back_populates="voice_calls")
 
 
 # --------------------------------------------------------------------------- #
@@ -627,21 +694,54 @@ class DistributionPost(Base):
     # "temporary external link" shape as other generated-content URLs
     # elsewhere in the app. Nullable: an older/text-only post has none.
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # status values (grew from the original single "posted"):
+    # draft | pending_approval | scheduled | publishing | posted | failed |
+    # cancelled | manual_required | posted_manual
     status: Mapped[str] = mapped_column(String(30), default="posted")
     posted_by: Mapped[str] = mapped_column(String(255))
     posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
+    # ---- Social Media Automation (migration 0017) ----
+    # Which CRM record this post was generated from — Campaign remains the
+    # tenant anchor above (campaign_id, required); source_shop_id is set only
+    # when the client generated the post from one specific shop within it.
+    source_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "campaign" | "shop"
+    source_shop_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("shops.id", ondelete="SET NULL"), nullable=True
+    )
+    # "page" (real Graph API publish, once connected) vs "group" (Meta does
+    # not support automated posting to ANY group via the API — see
+    # services/facebook_graph.py — so a group target always sets
+    # requires_manual_posting and is never picked up by the publisher).
+    target_kind: Mapped[str] = mapped_column(String(20), default="page")
+    # Facebook Page ID for target_kind="page"; a group URL/name for "group"
+    # (display + manual-navigation only, never sent to any API).
+    target_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    timezone: Mapped[str] = mapped_column(String(60), default="UTC")
+    external_post_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    requires_manual_posting: Mapped[bool] = mapped_column(Boolean, default=False)
+
     campaign: Mapped["Campaign"] = relationship()
+    source_shop: Mapped["Shop | None"] = relationship()
+    publishing_logs: Mapped[list["SocialPublishingLog"]] = relationship(
+        back_populates="post", cascade="all, delete-orphan", order_by="SocialPublishingLog.attempted_at"
+    )
 
 
 # --------------------------------------------------------------------------- #
-# Connected social/portal accounts (conceptual/demo — see
-# services/distribution.py). Client-level, not campaign-scoped: connecting
-# a platform once makes it available for Distribution posts across every
-# campaign that client owns. There is no real OAuth handshake — "Connect"
-# creates this row directly, same simulated pattern as the rest of this
-# feature; it exists so posting only ever offers platforms the client has
-# explicitly said they want to use, not a fixed hardcoded set.
+# Connected social/portal accounts. Client-level, not campaign-scoped:
+# connecting a platform once makes it available for Distribution posts
+# across every campaign that client owns. Facebook supports a real Meta
+# OAuth handshake (services/facebook_oauth.py) — access_token_encrypted etc.
+# get populated once FACEBOOK_APP_ID/SECRET are configured (routers/social.py).
+# Every other platform (instagram/linkedin/twitter/jobslinger/trustedherd)
+# still uses the original simulated "Connect" (this row created directly, no
+# token fields), same demo pattern as the rest of this feature — posting
+# only ever offers platforms the client has explicitly said they want to use,
+# not a fixed hardcoded set.
 # --------------------------------------------------------------------------- #
 class ClientSocialAccount(Base):
     __tablename__ = "client_social_accounts"
@@ -654,7 +754,124 @@ class ClientSocialAccount(Base):
     connected_by: Mapped[str] = mapped_column(String(255))
     connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    # ---- Social Media Automation / real Facebook OAuth (migration 0017) ----
+    # All nullable: a platform connected the old simulated way (no OAuth,
+    # e.g. jobslinger/trustedherd, or facebook/instagram/linkedin/twitter
+    # before real OAuth existed) simply has none of these set — `status`
+    # alone ("connected") is what every existing read already checks, so
+    # nothing about the pre-existing simulated flow breaks.
+    external_account_id: Mapped[str | None] = mapped_column(String(255), nullable=True)  # Facebook Page ID
+    access_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # connected | expired | error | disconnected
+    status: Mapped[str] = mapped_column(String(20), default="connected")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
     client: Mapped["Client"] = relationship()
+
+
+# --------------------------------------------------------------------------- #
+# Publishing attempt history for a DistributionPost — separate from the
+# post's own status/error_message/retry_count (which only ever reflect the
+# LATEST attempt) so a client can see every prior failure, not just the most
+# recent one. Never stores a token — see services/crypto.py for where those
+# actually live.
+# --------------------------------------------------------------------------- #
+class SocialPublishingLog(Base):
+    __tablename__ = "social_publishing_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    post_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("distribution_posts.id", ondelete="CASCADE"), index=True
+    )
+    platform: Mapped[str] = mapped_column(String(30))
+    target_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    external_post_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(30))  # success | failed
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    post: Mapped["DistributionPost"] = relationship(back_populates="publishing_logs")
+
+
+# --------------------------------------------------------------------------- #
+# Reusable post-copy templates ({{variable}} substitution — see
+# services/social_templates.py for the variables a Campaign/Shop actually
+# provide). client_id nullable: a template with no client_id is a built-in,
+# shared across every client; one with a client_id is that client's own.
+# --------------------------------------------------------------------------- #
+class SocialPostTemplate(Base):
+    __tablename__ = "social_post_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200))
+    platform: Mapped[str | None] = mapped_column(String(30), nullable=True)  # null = any platform
+    body_template: Mapped[str] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    client: Mapped["Client | None"] = relationship()
+
+
+# --------------------------------------------------------------------------- #
+# Social Media Automation rules ("when a new campaign/shop is created and
+# matches X, generate a post") — see services/social_automation.py for the
+# polling evaluator (this app has no event bus, so — same as everywhere else
+# background work happens here — a periodic poller is what "when X happens"
+# actually means). `last_run_at` is the watermark: only entities created
+# AFTER a rule's last run are considered, so enabling a rule never floods
+# every pre-existing campaign/shop with a generated post.
+# --------------------------------------------------------------------------- #
+class SocialAutomationRule(Base):
+    __tablename__ = "social_automation_rules"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # campaign_created | shop_created
+    trigger: Mapped[str] = mapped_column(String(30))
+    # Simple field==value equality checks against the triggering record,
+    # e.g. {"status": "active"} — deliberately not a general expression
+    # language; this app's "IF" clause is always this simple in practice.
+    conditions: Mapped[dict] = mapped_column(json_col(), default=dict)
+
+    destination_type: Mapped[str] = mapped_column(String(30))  # facebook | instagram | ...
+    target_kind: Mapped[str] = mapped_column(String(20), default="page")  # page | group
+    target_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)  # group name/URL, if target_kind=group
+
+    template_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("social_post_templates.id", ondelete="SET NULL"), nullable=True
+    )
+    use_ai: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_tone: Mapped[str] = mapped_column(String(30), default="professional")
+    ai_language: Mapped[str] = mapped_column(String(60), default="English")
+
+    # True (default/safe): generated posts land as "pending_approval" — a
+    # human always reviews before it can be scheduled/published. Only when a
+    # client explicitly flips this off AND sets schedule_time does a rule
+    # auto-schedule — and even then, a "group" target is never auto-
+    # schedulable (see services/social_automation.py), same restriction as
+    # the manual composer.
+    requires_approval: Mapped[bool] = mapped_column(Boolean, default=True)
+    schedule_time: Mapped[str | None] = mapped_column(String(8), nullable=True)  # "HH:MM", required if requires_approval=False
+    timezone: Mapped[str] = mapped_column(String(60), default="UTC")
+
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    client: Mapped["Client"] = relationship()
+    template: Mapped["SocialPostTemplate | None"] = relationship()
 
 
 # --------------------------------------------------------------------------- #

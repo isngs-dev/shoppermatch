@@ -19,3 +19,9 @@ openpyxl==3.1.5
 httpx==0.28.1
 pytest==8.3.4
 pytest-asyncio==0.25.0
+
+# zoneinfo (stdlib) has no bundled tzdata on Windows — needed for Social
+# Media Automation Rules' schedule_time-in-a-timezone computation
+# (services/social_automation.py). Harmless no-op on Linux/macOS, which
+# normally ship system tzdata already.
+tzdata; sys_platform == "win32"

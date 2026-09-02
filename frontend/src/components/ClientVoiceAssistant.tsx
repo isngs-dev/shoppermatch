@@ -68,6 +68,7 @@ const PAGE_PATHS: Record<string, string> = {
   campaigns: "/client/campaigns",
   "email-automation": "/client/email-automation",
   outreach: "/client/outreach",
+  "social-media": "/client/social-media",
   insights: "/client/insights",
   reports: "/client/reports",
   profile: "/client/profile",
@@ -319,7 +320,7 @@ export function ClientVoiceAssistant() {
       const connected = (accountsRes.items || []).filter((a: any) => a.connected);
       if (!connected.length) {
         await respondAndSpeak(
-          `You don't have any accounts connected yet — connect at least one on the Distribution tab first.`
+          `You don't have any accounts connected yet — connect at least one on the Social Media page first.`
         );
         return;
       }
@@ -332,9 +333,9 @@ export function ClientVoiceAssistant() {
       );
       toast(`Voice assistant: posted to ${res.count} regional destination(s) for ${draft.campaignName}.`, "success");
       await respondAndSpeak(`Posted to ${res.count} regional destination(s) for ${draft.campaignName}.`);
-      // Refresh if we're already looking at that campaign's Distribution tab
-      // so the new post shows up without the client having to do it manually.
-      if (locationRef.current.includes("/client/campaigns/")) {
+      // Refresh if we're already looking at the Social Media page so the
+      // new post shows up without the client having to do it manually.
+      if (locationRef.current.includes("/client/social-media")) {
         window.setTimeout(() => window.location.reload(), 800);
       }
     } catch (e: any) {

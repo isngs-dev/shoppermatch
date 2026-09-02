@@ -29,6 +29,7 @@ import { ClientEmailAutomation } from "./pages/client/ClientEmailAutomation";
 import { ClientInsights } from "./pages/client/ClientInsights";
 import { ClientReports } from "./pages/client/ClientReports";
 import { ClientProfile } from "./pages/client/ClientProfile";
+import { ClientSocialMedia } from "./pages/client/ClientSocialMedia";
 
 function RequireRole({ role, children }: { role: "admin" | "client"; children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -107,6 +108,7 @@ export default function App() {
         <Route path="/client/insights" element={<ClientInsights />} />
         <Route path="/client/reports" element={<ClientReports />} />
         <Route path="/client/profile" element={<ClientProfile />} />
+        <Route path="/client/social-media" element={<ClientSocialMedia />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

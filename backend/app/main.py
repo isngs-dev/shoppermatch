@@ -37,13 +37,18 @@ from .routers import (
     reports,
     shoppers,
     shops,
+    social,
     tracking,
     voice,
+    voice_calls,
     webhooks,
 )
 from .seed import maybe_seed
 from .services.automation import ensure_default_templates, run_automation_scheduler
 from .services.outbox import reset_stuck_jobs, run_outbox_worker
+from .services.social_automation import run_social_automation_scheduler
+from .services.social_publisher import run_social_publisher
+from .services.voice_call_scheduler import run_voice_call_scheduler
 
 
 @asynccontextmanager
@@ -63,12 +68,20 @@ async def lifespan(app: FastAPI):
         await session.commit()
     worker = asyncio.create_task(run_outbox_worker(), name="shoppermatch-email-outbox")
     automation_worker = asyncio.create_task(run_automation_scheduler(), name="shoppermatch-automation-scheduler")
+    social_worker = asyncio.create_task(run_social_publisher(), name="shoppermatch-social-publisher")
+    social_automation_worker = asyncio.create_task(
+        run_social_automation_scheduler(), name="shoppermatch-social-automation"
+    )
+    voice_call_worker = asyncio.create_task(run_voice_call_scheduler(), name="shoppermatch-voice-call-followup")
     try:
         yield
     finally:
         worker.cancel()
         automation_worker.cancel()
-        for task in (worker, automation_worker):
+        social_worker.cancel()
+        social_automation_worker.cancel()
+        voice_call_worker.cancel()
+        for task in (worker, automation_worker, social_worker, social_automation_worker, voice_call_worker):
             try:
                 await task
             except asyncio.CancelledError:
@@ -117,6 +130,8 @@ app.include_router(reports.router)
 app.include_router(admin_users.router)
 app.include_router(misc.router)
 app.include_router(voice.router)
+app.include_router(social.router)
+app.include_router(voice_calls.router)
 
 
 @app.get("/api/health", tags=["Meta"])

@@ -1,0 +1,731 @@
+"""Social Media Automation — /api/social/*.
+
+Extends the existing Region-Targeted Social Media Posting feature
+(DistributionPost / ClientSocialAccount, services/distribution.py) with: real
+Facebook OAuth, a generalized post composer/scheduler, AI generation, a
+reusable template system, and the manual/approval workflow for Facebook
+Groups (Meta does not support automated Group posting — see
+services/facebook_graph.py's module docstring).
+
+Every endpoint here is client-scoped via `require_client` and additionally
+filters through `Campaign.client_id == user.client_id` (never trusts a
+campaign_id/post_id from the request alone) — same tenant-isolation
+discipline as routers/client_portal.py and routers/campaigns.py.
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from ..config import settings
+from ..database import get_session
+from ..deps import require_client
+from ..models import (
+    Campaign,
+    ClientSocialAccount,
+    DistributionPost,
+    Shop,
+    SocialAutomationRule,
+    SocialPostTemplate,
+    SocialPublishingLog,
+    User,
+)
+from ..serializers import iso
+from ..services import facebook_oauth
+from ..services.audit import record_audit
+from ..services.crypto import encrypt_token
+from ..services.distribution import DESTINATION_TYPES, generate_post_image
+from ..services.social_ai import generate_post_text
+from ..services.social_publisher import _claim_for_publishing, attempt_publish
+from ..services.tracking import now
+
+router = APIRouter(prefix="/api/social", tags=["Social Media Automation"])
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+async def _require_campaign(session: AsyncSession, campaign_id: uuid.UUID, user: User) -> Campaign:
+    campaign = await session.get(Campaign, campaign_id)
+    if campaign is None or campaign.client_id != user.client_id:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
+
+
+async def _require_post(session: AsyncSession, post_id: uuid.UUID, user: User) -> DistributionPost:
+    stmt = (
+        select(DistributionPost)
+        .where(DistributionPost.id == post_id)
+        .options(selectinload(DistributionPost.campaign), selectinload(DistributionPost.source_shop))
+    )
+    post = (await session.execute(stmt)).scalar_one_or_none()
+    if post is None or post.campaign.client_id != user.client_id:
+        raise HTTPException(status_code=404, detail="Post not found")
+    return post
+
+
+def _post_out(post: DistributionPost) -> dict:
+    return {
+        "id": str(post.id),
+        "campaign_id": str(post.campaign_id),
+        "campaign_name": post.campaign.name if post.campaign else None,
+        "source_type": post.source_type,
+        "source_shop_id": str(post.source_shop_id) if post.source_shop_id else None,
+        "source_shop_name": post.source_shop.shop_name if post.source_shop else None,
+        "region": post.region,
+        "destination_type": post.destination_type,
+        "destination_name": post.destination_name,
+        "target_kind": post.target_kind,
+        "target_ref": post.target_ref,
+        "message": post.message,
+        "image_url": post.image_url,
+        "status": post.status,
+        "scheduled_at": iso(post.scheduled_at),
+        "timezone": post.timezone,
+        "posted_at": iso(post.posted_at),
+        "posted_by": post.posted_by,
+        "external_post_id": post.external_post_id,
+        "error_message": post.error_message,
+        "retry_count": post.retry_count,
+        "requires_manual_posting": post.requires_manual_posting,
+    }
+
+
+async def _account_for(session: AsyncSession, client_id: uuid.UUID, platform: str) -> ClientSocialAccount | None:
+    stmt = select(ClientSocialAccount).where(
+        ClientSocialAccount.client_id == client_id, ClientSocialAccount.platform == platform
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+# --------------------------------------------------------------------------- #
+# Facebook OAuth (real Meta Graph API — see services/facebook_oauth.py)
+# --------------------------------------------------------------------------- #
+@router.get("/facebook/status")
+async def facebook_status(user: User = Depends(require_client)):
+    return {"configured": facebook_oauth.is_configured()}
+
+
+@router.get("/facebook/connect")
+async def facebook_connect(user: User = Depends(require_client)):
+    url = facebook_oauth.build_authorize_url(str(user.client_id))
+    return {"authorize_url": url}
+
+
+@router.get("/facebook/callback", include_in_schema=False)
+async def facebook_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    """Public — Meta redirects the user's browser here directly, so this
+    request never carries our Authorization bearer header. `state` (signed
+    at /facebook/connect time) is what proves which client this belongs to."""
+    settings_page = f"{settings.public_base_url.rstrip('/')}/client/settings/social"
+    if error or not code or not state:
+        msg = error_description or error or "Facebook did not return an authorization code."
+        return RedirectResponse(url=f"{settings_page}?fb_error={msg}")
+    try:
+        client_id = facebook_oauth.verify_state(state)
+        pages = await facebook_oauth.exchange_code_for_pages(code)
+    except HTTPException as exc:
+        return RedirectResponse(url=f"{settings_page}?fb_error={exc.detail}")
+    if not pages:
+        return RedirectResponse(
+            url=f"{settings_page}?fb_error=No Facebook Pages found for this account — you must be an admin of at least one Page."
+        )
+    pending_id = facebook_oauth.stash_pending_pages(client_id, pages)
+    return RedirectResponse(url=f"{settings_page}?fb_pending={pending_id}")
+
+
+@router.get("/facebook/pending/{pending_id}")
+async def facebook_pending_pages(pending_id: str, user: User = Depends(require_client)):
+    pages = facebook_oauth.get_pending_pages(pending_id, str(user.client_id))
+    return {"pages": [{"id": p.get("id"), "name": p.get("name"), "category": p.get("category")} for p in pages]}
+
+
+class SelectPageRequest(BaseModel):
+    pending_id: str
+    page_id: str
+
+
+@router.post("/facebook/select-page")
+async def facebook_select_page(
+    body: SelectPageRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    page = facebook_oauth.pop_pending_page(body.pending_id, str(user.client_id), body.page_id)
+    account = await _account_for(session, user.client_id, "facebook")
+    if account is None:
+        account = ClientSocialAccount(client_id=user.client_id, platform="facebook", connected_by=user.email)
+        session.add(account)
+    account.account_name = page.get("name") or "Facebook Page"
+    account.external_account_id = page.get("id")
+    account.access_token_encrypted = encrypt_token(page["access_token"])
+    account.status = "connected"
+    account.connected_by = user.email
+    account.token_expires_at = None  # Page tokens derived from a long-lived user token don't carry a fixed expiry
+    await record_audit(
+        session,
+        action="social_account.facebook_connected",
+        actor=user.email,
+        entity_type="client",
+        entity_id=str(user.client_id),
+        summary=f"Connected Facebook Page: {account.account_name}",
+        meta={"page_id": account.external_account_id},
+    )
+    await session.commit()
+    return {"platform": "facebook", "account_name": account.account_name, "connected": True}
+
+
+# --------------------------------------------------------------------------- #
+# Posts
+# --------------------------------------------------------------------------- #
+@router.get("/posts")
+async def list_posts(
+    campaign_id: uuid.UUID | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    stmt = (
+        select(DistributionPost)
+        .join(Campaign, DistributionPost.campaign_id == Campaign.id)
+        .where(Campaign.client_id == user.client_id)
+        .order_by(DistributionPost.posted_at.desc())
+        .options(selectinload(DistributionPost.campaign), selectinload(DistributionPost.source_shop))
+    )
+    if campaign_id is not None:
+        stmt = stmt.where(DistributionPost.campaign_id == campaign_id)
+    if status_filter:
+        stmt = stmt.where(DistributionPost.status == status_filter)
+    posts = (await session.execute(stmt)).scalars().all()
+    return {"items": [_post_out(p) for p in posts], "total": len(posts)}
+
+
+@router.get("/posts/{post_id}")
+async def get_post(post_id: uuid.UUID, session: AsyncSession = Depends(get_session), user: User = Depends(require_client)):
+    post = await _require_post(session, post_id, user)
+    return _post_out(post)
+
+
+class CreatePostRequest(BaseModel):
+    campaign_id: uuid.UUID
+    source_type: str = Field(pattern="^(campaign|shop)$")
+    source_shop_id: uuid.UUID | None = None
+    destination_type: str
+    target_kind: str = Field(default="page", pattern="^(page|group)$")
+    target_ref: str | None = None
+    message: str = Field(min_length=1, max_length=5000)
+    image_url: str | None = None
+
+
+@router.post("/posts")
+async def create_post(
+    body: CreatePostRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    campaign = await _require_campaign(session, body.campaign_id, user)
+    valid_platforms = {p for p, _ in DESTINATION_TYPES}
+    if body.destination_type not in valid_platforms:
+        raise HTTPException(status_code=400, detail=f"Unknown platform: {body.destination_type}")
+
+    shop = None
+    if body.source_type == "shop":
+        if body.source_shop_id is None:
+            raise HTTPException(status_code=400, detail="source_shop_id is required when source_type='shop'")
+        shop = await session.get(Shop, body.source_shop_id)
+        if shop is None or shop.campaign_id != campaign.id:
+            raise HTTPException(status_code=404, detail="Shop not found in this campaign")
+
+    from ..services.distribution import region_for_shop, regions_for_shops
+
+    region = region_for_shop(shop) if shop else (next(iter(regions_for_shops(await campaign.awaitable_attrs.shops)), "Unspecified Region"))
+    is_group = body.target_kind == "group"
+
+    post = DistributionPost(
+        campaign_id=campaign.id,
+        region=region,
+        destination_type=body.destination_type,
+        destination_name=body.target_ref or f"{body.destination_type} {body.target_kind}",
+        message=body.message,
+        image_url=body.image_url,
+        status="manual_required" if is_group else "draft",
+        posted_by=user.email,
+        posted_at=now(),
+        source_type=body.source_type,
+        source_shop_id=shop.id if shop else None,
+        target_kind=body.target_kind,
+        target_ref=body.target_ref,
+        requires_manual_posting=is_group,
+    )
+    session.add(post)
+    await record_audit(
+        session,
+        action="social_post.created",
+        actor=user.email,
+        entity_type="distribution_post",
+        entity_id=str(post.id),
+        summary=f"Created {body.destination_type} post draft for {campaign.name}",
+        meta={"platform": body.destination_type, "target_kind": body.target_kind},
+    )
+    await session.commit()
+    return _post_out(post)
+
+
+class UpdatePostRequest(BaseModel):
+    message: str | None = Field(default=None, max_length=5000)
+    image_url: str | None = None
+    target_ref: str | None = None
+
+
+_TERMINAL_STATUSES = {"posted", "posted_manual", "publishing"}
+
+
+@router.patch("/posts/{post_id}")
+async def update_post(
+    post_id: uuid.UUID,
+    body: UpdatePostRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    post = await _require_post(session, post_id, user)
+    if post.status in _TERMINAL_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Cannot edit a post that is already {post.status}")
+    if body.message is not None:
+        post.message = body.message
+    if body.image_url is not None:
+        post.image_url = body.image_url
+    if body.target_ref is not None:
+        post.target_ref = body.target_ref
+        post.destination_name = body.target_ref
+    await session.commit()
+    return _post_out(post)
+
+
+@router.delete("/posts/{post_id}")
+async def delete_post(post_id: uuid.UUID, session: AsyncSession = Depends(get_session), user: User = Depends(require_client)):
+    post = await _require_post(session, post_id, user)
+    if post.status in _TERMINAL_STATUSES:
+        raise HTTPException(status_code=400, detail="Cannot delete a post that has already been published")
+    await session.delete(post)
+    await session.commit()
+    return {"deleted": True}
+
+
+@router.post("/posts/{post_id}/duplicate")
+async def duplicate_post(post_id: uuid.UUID, session: AsyncSession = Depends(get_session), user: User = Depends(require_client)):
+    post = await _require_post(session, post_id, user)
+    copy = DistributionPost(
+        campaign_id=post.campaign_id,
+        region=post.region,
+        destination_type=post.destination_type,
+        destination_name=post.destination_name,
+        message=post.message,
+        image_url=post.image_url,
+        status="manual_required" if post.target_kind == "group" else "draft",
+        posted_by=user.email,
+        posted_at=now(),
+        source_type=post.source_type,
+        source_shop_id=post.source_shop_id,
+        target_kind=post.target_kind,
+        target_ref=post.target_ref,
+        requires_manual_posting=post.target_kind == "group",
+    )
+    session.add(copy)
+    await session.commit()
+    return _post_out(copy)
+
+
+class ScheduleRequest(BaseModel):
+    scheduled_at: datetime
+    timezone: str = "UTC"
+
+
+@router.post("/posts/{post_id}/schedule")
+async def schedule_post(
+    post_id: uuid.UUID,
+    body: ScheduleRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    post = await _require_post(session, post_id, user)
+    if post.target_kind == "group":
+        raise HTTPException(
+            status_code=400,
+            detail="Facebook Groups cannot be scheduled for automatic publishing — use Mark as Posted after posting manually.",
+        )
+    if post.status in _TERMINAL_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Cannot schedule a post that is already {post.status}")
+    account = await _account_for(session, user.client_id, post.destination_type)
+    if account is None or account.status != "connected" or not account.access_token_encrypted:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Connect a {post.destination_type} account with a valid token before scheduling.",
+        )
+    post.scheduled_at = body.scheduled_at
+    post.timezone = body.timezone
+    post.status = "scheduled"
+    post.error_message = None
+    await record_audit(
+        session,
+        action="social_post.scheduled",
+        actor=user.email,
+        entity_type="distribution_post",
+        entity_id=str(post.id),
+        summary=f"Scheduled {post.destination_type} post for {iso(body.scheduled_at)}",
+        meta={"scheduled_at": iso(body.scheduled_at), "timezone": body.timezone},
+    )
+    await session.commit()
+    return _post_out(post)
+
+
+@router.post("/posts/{post_id}/publish")
+async def publish_post_now(
+    post_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    """Immediate publish — a real, synchronous Graph API call (same
+    single-POST latency the pre-existing simulated Distribution "Post Now"
+    already accepted blocking the request for), not the scheduled/background
+    path. Group targets are rejected outright — see the class docstring."""
+    post = await _require_post(session, post_id, user)
+    if post.target_kind == "group":
+        raise HTTPException(status_code=400, detail="Facebook Groups require manual posting — see Mark as Posted.")
+    if post.status in _TERMINAL_STATUSES:
+        raise HTTPException(status_code=400, detail=f"This post is already {post.status}")
+    account = await _account_for(session, user.client_id, post.destination_type)
+    if account is None or account.status != "connected" or not account.access_token_encrypted:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Connect a {post.destination_type} account with a valid token before publishing.",
+        )
+    # Route through the same idempotent claim the scheduler uses: flip to
+    # 'scheduled' first so status='scheduled' -> 'publishing' applies
+    # uniformly whether a post got here via a click or a scheduled tick —
+    # see services/social_publisher.py::attempt_publish, shared by both.
+    post.status = "scheduled"
+    post.scheduled_at = now()
+    await session.commit()
+
+    if not await _claim_for_publishing(session, post.id):
+        raise HTTPException(status_code=409, detail="This post is already being published.")
+
+    post = await _require_post(session, post_id, user)
+    await attempt_publish(session, post, account)
+    await session.commit()
+    if post.status == "failed":
+        raise HTTPException(status_code=502, detail=post.error_message)
+    return _post_out(post)
+
+
+@router.post("/posts/{post_id}/cancel")
+async def cancel_post(post_id: uuid.UUID, session: AsyncSession = Depends(get_session), user: User = Depends(require_client)):
+    post = await _require_post(session, post_id, user)
+    if post.status in _TERMINAL_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Cannot cancel a post that is already {post.status}")
+    post.status = "cancelled"
+    await session.commit()
+    return _post_out(post)
+
+
+@router.post("/posts/{post_id}/mark-posted")
+async def mark_posted_manually(
+    post_id: uuid.UUID, session: AsyncSession = Depends(get_session), user: User = Depends(require_client)
+):
+    """The Facebook Groups manual/approval workflow's final step — the
+    client posted it themselves in the Facebook app/site, and confirms that
+    here. This app never claims to have posted it automatically."""
+    post = await _require_post(session, post_id, user)
+    if post.target_kind != "group":
+        raise HTTPException(status_code=400, detail="Only group posts use the manual-posting workflow")
+    post.status = "posted_manual"
+    post.posted_at = now()
+    post.posted_by = user.email
+    await record_audit(
+        session,
+        action="social_post.marked_posted_manually",
+        actor=user.email,
+        entity_type="distribution_post",
+        entity_id=str(post.id),
+        summary=f"Marked group post as manually posted for {post.campaign.name}",
+        meta={"target_ref": post.target_ref},
+    )
+    await session.commit()
+    return _post_out(post)
+
+
+@router.get("/posts/{post_id}/logs")
+async def get_post_logs(post_id: uuid.UUID, session: AsyncSession = Depends(get_session), user: User = Depends(require_client)):
+    post = await _require_post(session, post_id, user)
+    stmt = select(SocialPublishingLog).where(SocialPublishingLog.post_id == post.id).order_by(SocialPublishingLog.attempted_at.desc())
+    logs = (await session.execute(stmt)).scalars().all()
+    return {
+        "items": [
+            {
+                "id": str(l.id),
+                "platform": l.platform,
+                "target_ref": l.target_ref,
+                "attempted_at": iso(l.attempted_at),
+                "published_at": iso(l.published_at),
+                "external_post_id": l.external_post_id,
+                "status": l.status,
+                "error_message": l.error_message,
+                "retry_count": l.retry_count,
+            }
+            for l in logs
+        ]
+    }
+
+
+class GeneratePostRequest(BaseModel):
+    tone: str = Field(default="professional", pattern="^(professional|friendly|promotional|short)$")
+    language: str = Field(default="English")
+    instructions: str | None = Field(default=None, max_length=1000)
+
+
+@router.post("/posts/{post_id}/generate")
+async def generate_post(
+    post_id: uuid.UUID,
+    body: GeneratePostRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    post = await _require_post(session, post_id, user)
+    if post.status in _TERMINAL_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Cannot regenerate a post that is already {post.status}")
+
+    from ..services.social_templates import variables_from_campaign, variables_from_shop
+
+    if post.source_shop:
+        variables = variables_from_shop(post.source_shop, post.campaign, settings.public_base_url)
+    else:
+        variables = variables_from_campaign(post.campaign, settings.public_base_url)
+
+    text = await generate_post_text(
+        platform=post.destination_type,
+        tone=body.tone,
+        language=body.language,
+        variables=variables,
+        instructions=body.instructions,
+    )
+    post.message = text
+    await session.commit()
+    return _post_out(post)
+
+
+@router.post("/posts/{post_id}/generate-image")
+async def generate_post_image_endpoint(
+    post_id: uuid.UUID, session: AsyncSession = Depends(get_session), user: User = Depends(require_client)
+):
+    post = await _require_post(session, post_id, user)
+    image_url = await generate_post_image(post.campaign.name, post.message)
+    post.image_url = image_url
+    await session.commit()
+    return _post_out(post)
+
+
+# --------------------------------------------------------------------------- #
+# Calendar
+# --------------------------------------------------------------------------- #
+@router.get("/calendar")
+async def calendar_posts(
+    start: datetime = Query(..., description="Range start, inclusive (ISO-8601)"),
+    end: datetime = Query(..., description="Range end, exclusive (ISO-8601)"),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    """Posts to plot on the Social Calendar — keyed by whichever date is
+    actually meaningful for that post: scheduled_at for anything not yet
+    published, posted_at for anything that already is (published or
+    manually marked posted)."""
+    from sqlalchemy import and_, or_
+
+    stmt = (
+        select(DistributionPost)
+        .join(Campaign, DistributionPost.campaign_id == Campaign.id)
+        .where(
+            Campaign.client_id == user.client_id,
+            or_(
+                and_(
+                    DistributionPost.scheduled_at.is_not(None),
+                    DistributionPost.scheduled_at >= start,
+                    DistributionPost.scheduled_at < end,
+                ),
+                and_(
+                    DistributionPost.status.in_(["posted", "posted_manual"]),
+                    DistributionPost.posted_at >= start,
+                    DistributionPost.posted_at < end,
+                ),
+            ),
+        )
+        .options(selectinload(DistributionPost.campaign), selectinload(DistributionPost.source_shop))
+    )
+    posts = (await session.execute(stmt)).scalars().all()
+    items = []
+    for p in posts:
+        row = _post_out(p)
+        row["calendar_date"] = (
+            row["scheduled_at"] if p.scheduled_at and p.status not in ("posted", "posted_manual") else row["posted_at"]
+        )
+        items.append(row)
+    return {"items": items}
+
+
+# --------------------------------------------------------------------------- #
+# Automation Rules (Settings → Social Automation)
+# --------------------------------------------------------------------------- #
+def _rule_out(rule: SocialAutomationRule) -> dict:
+    return {
+        "id": str(rule.id),
+        "name": rule.name,
+        "enabled": rule.enabled,
+        "trigger": rule.trigger,
+        "conditions": rule.conditions or {},
+        "destination_type": rule.destination_type,
+        "target_kind": rule.target_kind,
+        "target_ref": rule.target_ref,
+        "template_id": str(rule.template_id) if rule.template_id else None,
+        "use_ai": rule.use_ai,
+        "ai_tone": rule.ai_tone,
+        "ai_language": rule.ai_language,
+        "requires_approval": rule.requires_approval,
+        "schedule_time": rule.schedule_time,
+        "timezone": rule.timezone,
+        "last_run_at": iso(rule.last_run_at),
+        "created_at": iso(rule.created_at),
+        "updated_at": iso(rule.updated_at),
+    }
+
+
+@router.get("/automation-rules")
+async def list_automation_rules(session: AsyncSession = Depends(get_session), user: User = Depends(require_client)):
+    stmt = (
+        select(SocialAutomationRule)
+        .where(SocialAutomationRule.client_id == user.client_id)
+        .order_by(SocialAutomationRule.created_at.desc())
+    )
+    rules = (await session.execute(stmt)).scalars().all()
+    return {"items": [_rule_out(r) for r in rules]}
+
+
+class AutomationRuleRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    enabled: bool = True
+    trigger: str = Field(pattern="^(campaign_created|shop_created)$")
+    conditions: dict = Field(default_factory=dict)
+    destination_type: str
+    target_kind: str = Field(default="page", pattern="^(page|group)$")
+    target_ref: str | None = None
+    template_id: uuid.UUID | None = None
+    use_ai: bool = False
+    ai_tone: str = Field(default="professional", pattern="^(professional|friendly|promotional|short)$")
+    ai_language: str = "English"
+    requires_approval: bool = True
+    schedule_time: str | None = Field(default=None, pattern="^[0-2][0-9]:[0-5][0-9]$")
+    timezone: str = "UTC"
+
+
+def _validate_rule_body(body: AutomationRuleRequest) -> None:
+    valid_platforms = {p for p, _ in DESTINATION_TYPES}
+    if body.destination_type not in valid_platforms:
+        raise HTTPException(status_code=400, detail=f"Unknown platform: {body.destination_type}")
+    if not body.requires_approval and body.target_kind == "page" and not body.schedule_time:
+        raise HTTPException(
+            status_code=400,
+            detail="A schedule_time is required when requires_approval is off — otherwise there's nothing to auto-schedule against.",
+        )
+
+
+@router.post("/automation-rules")
+async def create_automation_rule(
+    body: AutomationRuleRequest, session: AsyncSession = Depends(get_session), user: User = Depends(require_client)
+):
+    _validate_rule_body(body)
+    if body.template_id:
+        template = await session.get(SocialPostTemplate, body.template_id)
+        if template is None or (template.client_id is not None and template.client_id != user.client_id):
+            raise HTTPException(status_code=404, detail="Template not found")
+
+    rule = SocialAutomationRule(
+        client_id=user.client_id,
+        name=body.name,
+        enabled=body.enabled,
+        trigger=body.trigger,
+        conditions=body.conditions,
+        destination_type=body.destination_type,
+        target_kind=body.target_kind,
+        target_ref=body.target_ref,
+        template_id=body.template_id,
+        use_ai=body.use_ai,
+        ai_tone=body.ai_tone,
+        ai_language=body.ai_language,
+        requires_approval=body.requires_approval,
+        schedule_time=body.schedule_time,
+        timezone=body.timezone,
+        created_by=user.email,
+        # Watermarked to "now" so enabling a rule only ever reacts to FUTURE
+        # campaigns/shops, never retroactively floods every existing one —
+        # see services/social_automation.py.
+        last_run_at=now(),
+    )
+    session.add(rule)
+    await record_audit(
+        session,
+        action="social_automation_rule.created",
+        actor=user.email,
+        entity_type="social_automation_rule",
+        entity_id=str(rule.id),
+        summary=f"Created automation rule '{rule.name}' ({rule.trigger} -> {rule.destination_type})",
+        meta={"trigger": rule.trigger, "destination_type": rule.destination_type},
+    )
+    await session.commit()
+    return _rule_out(rule)
+
+
+@router.patch("/automation-rules/{rule_id}")
+async def update_automation_rule(
+    rule_id: uuid.UUID,
+    body: AutomationRuleRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    rule = await session.get(SocialAutomationRule, rule_id)
+    if rule is None or rule.client_id != user.client_id:
+        raise HTTPException(status_code=404, detail="Automation rule not found")
+    _validate_rule_body(body)
+    if body.template_id:
+        template = await session.get(SocialPostTemplate, body.template_id)
+        if template is None or (template.client_id is not None and template.client_id != user.client_id):
+            raise HTTPException(status_code=404, detail="Template not found")
+
+    for field in (
+        "name", "enabled", "trigger", "conditions", "destination_type", "target_kind", "target_ref",
+        "template_id", "use_ai", "ai_tone", "ai_language", "requires_approval", "schedule_time", "timezone",
+    ):
+        setattr(rule, field, getattr(body, field))
+    await session.commit()
+    return _rule_out(rule)
+
+
+@router.delete("/automation-rules/{rule_id}")
+async def delete_automation_rule(
+    rule_id: uuid.UUID, session: AsyncSession = Depends(get_session), user: User = Depends(require_client)
+):
+    rule = await session.get(SocialAutomationRule, rule_id)
+    if rule is None or rule.client_id != user.client_id:
+        raise HTTPException(status_code=404, detail="Automation rule not found")
+    await session.delete(rule)
+    await session.commit()
+    return {"deleted": True}

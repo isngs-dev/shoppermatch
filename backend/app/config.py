@@ -157,6 +157,48 @@ class Settings(BaseSettings):
     # graphic — same key as everything else above, one more OpenAI capability.
     openai_image_model: str = "gpt-image-1"
 
+    # ----- Social Media Automation: Facebook (Meta Graph API) -----
+    # Real OAuth — requires a Meta Developer App with App Review approved for
+    # pages_show_list / pages_read_engagement / pages_manage_posts. Unset by
+    # default: /api/social/facebook/connect reports NOT_CONFIGURED until these
+    # are provided, same "inert until configured" pattern as OPENAI_API_KEY.
+    facebook_app_id: str | None = None
+    facebook_app_secret: str | None = None
+    facebook_redirect_uri: str | None = None
+    # Bump when Meta deprecates the pinned version — see
+    # https://developers.facebook.com/docs/graph-api/changelog for the
+    # current minimum supported version at the time you configure this.
+    facebook_graph_api_version: str = "v21.0"
+
+    # Fernet key (32 url-safe base64 bytes — `Fernet.generate_key()`) used to
+    # encrypt OAuth access/refresh tokens at rest (services/crypto.py). MUST
+    # be set explicitly in production — falling back to secret_key means
+    # rotating secret_key would silently make every stored token undecryptable,
+    # which is acceptable only for local/demo use.
+    social_token_encryption_key: str | None = None
+
+    # ----- Social Media Automation: scheduling/publishing worker -----
+    social_publisher_poll_seconds: float = 15.0
+    social_publisher_max_attempts: int = 3
+
+    # ----- AI Voice Call Follow-Up (Email Automation step 07) -----
+    # Real outbound calls via Twilio Programmable Voice — inert (calls never
+    # actually dial) until all three are set, same "not configured" posture
+    # as Facebook/OpenAI elsewhere in this app. TWILIO_PHONE_NUMBER is the
+    # E.164 number ("From") Twilio dials out from.
+    twilio_account_sid: str | None = None
+    twilio_auth_token: str | None = None
+    twilio_phone_number: str | None = None
+    # A Twilio built-in Amazon Polly neural voice — realistic, US-accented,
+    # zero extra TTS integration needed (see services/voice_call.py). Full
+    # list: https://www.twilio.com/docs/voice/twiml/say/text-speech#available-voices-and-languages
+    twilio_voice: str = "Polly.Joanna-Neural"
+    voice_call_poll_seconds: float = 60.0
+    # Global pacing cap across every automation, mirroring bulk_email_daily_limit
+    # — real phone calls cost real money per minute; this is the one knob
+    # that protects against a runaway automation dialing hundreds of numbers.
+    voice_call_daily_limit: int = 50
+
     @property
     def resolved_database_url(self) -> str:
         # Managed Postgres add-ons (Railway, Render, Heroku, ...) inject a

@@ -39,8 +39,10 @@ TOOLS: list[dict[str, Any]] = [
             "name": "navigate",
             "description": (
                 "Go to a different page in the client portal. Use page='campaign_detail' to open ONE "
-                "specific campaign's page directly (e.g. 'take me to the distribution tab for Nike Mumbai "
-                "Store Audit', 'open the outreach tab for that campaign') — set campaign_name and detail_tab."
+                "specific campaign's page directly (e.g. 'open the outreach tab for Nike Mumbai Store "
+                "Audit') — set campaign_name and detail_tab. Use page='social-media' for the client's "
+                "Social Media Automation hub (posts/templates/connected accounts across ALL campaigns) — "
+                "not a per-campaign tab."
             ),
             "parameters": {
                 "type": "object",
@@ -52,6 +54,7 @@ TOOLS: list[dict[str, Any]] = [
                             "campaigns",
                             "email-automation",
                             "outreach",
+                            "social-media",
                             "insights",
                             "reports",
                             "profile",
@@ -79,7 +82,6 @@ TOOLS: list[dict[str, Any]] = [
                             "shoppers",
                             "recommendations",
                             "outreach",
-                            "distribution",
                             "tracking",
                             "insights",
                         ],
@@ -138,8 +140,8 @@ TOOLS: list[dict[str, Any]] = [
             "name": "draft_distribution_post",
             "description": (
                 "Write or revise the social/portal post creative (caption text) for a named "
-                "campaign's Region-Targeted Social Media Posting (the Distribution tab) — e.g. "
-                "'write a post for Nike Mumbai Store Audit', 'make that post punchier'. If revising "
+                "campaign's Region-Targeted Social Media Posting (viewable on the Social Media page) — "
+                "e.g. 'write a post for Nike Mumbai Store Audit', 'make that post punchier'. If revising "
                 "a draft from earlier in this conversation, return the full updated text. This is "
                 "text only — no image is generated at this step (that happens right before "
                 "posting, via post_distribution, so nothing is generated for a draft that gets "
@@ -379,9 +381,10 @@ Rules:
   propose_start_automation -> start_campaign_automation. Always propose \
   first and require a clear spoken/typed confirmation before the actual \
   send tool.
-- Region-Targeted Social Media Posting (the Distribution tab — posting a \
-  campaign's creative to region-matched Facebook/Instagram/LinkedIn/Twitter/ \
-  JobSlinger/TrustedHerd accounts): writing/revising the post's caption text \
+- Region-Targeted Social Media Posting (viewable on the Social Media page — \
+  posting a campaign's creative to region-matched Facebook/Instagram/ \
+  LinkedIn/Twitter/JobSlinger/TrustedHerd accounts): writing/revising the \
+  post's caption text \
   goes through `draft_distribution_post` (MUST call this tool, never write \
   the caption directly in your reply). Actually publishing it goes through \
   propose_post_distribution -> post_distribution, same propose-then-confirm \

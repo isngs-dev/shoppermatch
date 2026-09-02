@@ -183,6 +183,38 @@ export const api = {
     request("/api/client/social-accounts/connect", { method: "POST", body: { platform, account_name: accountName } }),
   disconnectSocialAccount: (platform: string) =>
     request(`/api/client/social-accounts/${platform}`, { method: "DELETE" }),
+  // Social Media Automation
+  facebookStatus: () => request("/api/social/facebook/status"),
+  facebookConnect: () => request("/api/social/facebook/connect"),
+  facebookPendingPages: (pendingId: string) => request(`/api/social/facebook/pending/${pendingId}`),
+  facebookSelectPage: (pendingId: string, pageId: string) =>
+    request("/api/social/facebook/select-page", { method: "POST", body: { pending_id: pendingId, page_id: pageId } }),
+  socialPosts: (params?: Record<string, any>) => request("/api/social/posts" + qs(params)),
+  socialPost: (id: string) => request(`/api/social/posts/${id}`),
+  createSocialPost: (body: Record<string, any>) => request("/api/social/posts", { method: "POST", body }),
+  updateSocialPost: (id: string, body: Record<string, any>) =>
+    request(`/api/social/posts/${id}`, { method: "PATCH", body }),
+  deleteSocialPost: (id: string) => request(`/api/social/posts/${id}`, { method: "DELETE" }),
+  duplicateSocialPost: (id: string) => request(`/api/social/posts/${id}/duplicate`, { method: "POST" }),
+  scheduleSocialPost: (id: string, scheduledAt: string, timezone: string) =>
+    request(`/api/social/posts/${id}/schedule`, { method: "POST", body: { scheduled_at: scheduledAt, timezone } }),
+  publishSocialPostNow: (id: string) => request(`/api/social/posts/${id}/publish`, { method: "POST" }),
+  cancelSocialPost: (id: string) => request(`/api/social/posts/${id}/cancel`, { method: "POST" }),
+  markSocialPostPosted: (id: string) => request(`/api/social/posts/${id}/mark-posted`, { method: "POST" }),
+  generateSocialPostText: (id: string, body: Record<string, any>) =>
+    request(`/api/social/posts/${id}/generate`, { method: "POST", body }),
+  generateSocialPostImage: (id: string) => request(`/api/social/posts/${id}/generate-image`, { method: "POST" }),
+  socialPostLogs: (id: string) => request(`/api/social/posts/${id}/logs`),
+  socialCalendar: (start: string, end: string) =>
+    request("/api/social/calendar" + qs({ start, end })),
+  socialAutomationRules: () => request("/api/social/automation-rules"),
+  createSocialAutomationRule: (body: Record<string, any>) =>
+    request("/api/social/automation-rules", { method: "POST", body }),
+  updateSocialAutomationRule: (id: string, body: Record<string, any>) =>
+    request(`/api/social/automation-rules/${id}`, { method: "PATCH", body }),
+  deleteSocialAutomationRule: (id: string) =>
+    request(`/api/social/automation-rules/${id}`, { method: "DELETE" }),
+
   setShopBonus: (campaignId: string, shopId: string, amount: number, note?: string) =>
     request(`/api/campaigns/${campaignId}/shops/${shopId}/bonus`, {
       method: "POST",
@@ -323,7 +355,12 @@ export const api = {
     scheduled_start_at?: string | null;
     batch_size?: number | null;
     total_iterations?: number;
+    voice_call_enabled?: boolean;
+    voice_call_delay_days?: number;
+    voice_call_retry_gap_days?: number;
+    voice_call_max_attempts?: number;
   }) => request("/api/automations", { method: "POST", body }),
+  automationVoiceCalls: (automationId: string) => request(`/api/voice-calls/automations/${automationId}`),
   addAutomationShoppers: (id: string, shopperIds: string[], shopIds?: string[]) =>
     request(`/api/automations/${id}/shoppers`, {
       method: "POST",

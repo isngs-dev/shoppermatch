@@ -77,6 +77,35 @@ _RETROFIT_COLUMNS: list[tuple[str, str, str]] = [
     ("email_automations", "total_iterations", "INTEGER DEFAULT 1"),
     ("email_automations", "step_template_ids", "JSON"),
     ("shopper_automation_states", "shop_id", "VARCHAR(36)"),
+    # Social Media Automation (migration 0017)
+    ("client_social_accounts", "external_account_id", "VARCHAR(255)"),
+    ("client_social_accounts", "access_token_encrypted", "TEXT"),
+    ("client_social_accounts", "refresh_token_encrypted", "TEXT"),
+    ("client_social_accounts", "token_expires_at", "TIMESTAMP WITH TIME ZONE"),
+    ("client_social_accounts", "status", "VARCHAR(20) DEFAULT 'connected'"),
+    ("client_social_accounts", "updated_at", "TIMESTAMP WITH TIME ZONE"),
+    ("distribution_posts", "source_type", "VARCHAR(20)"),
+    ("distribution_posts", "source_shop_id", "VARCHAR(36)"),
+    ("distribution_posts", "target_kind", "VARCHAR(20) DEFAULT 'page'"),
+    ("distribution_posts", "target_ref", "VARCHAR(255)"),
+    ("distribution_posts", "scheduled_at", "TIMESTAMP WITH TIME ZONE"),
+    ("distribution_posts", "timezone", "VARCHAR(60) DEFAULT 'UTC'"),
+    ("distribution_posts", "external_post_id", "VARCHAR(120)"),
+    ("distribution_posts", "error_message", "TEXT"),
+    ("distribution_posts", "retry_count", "INTEGER DEFAULT 0"),
+    ("distribution_posts", "requires_manual_posting", "BOOLEAN DEFAULT FALSE"),
+    # Social Media Automation Rules (migration 0018)
+    ("shops", "created_at", "TIMESTAMP WITH TIME ZONE"),
+    # AI Voice Call Follow-Up (migration 0019)
+    ("email_automations", "voice_call_enabled", "BOOLEAN DEFAULT FALSE"),
+    ("email_automations", "voice_call_delay_days", "INTEGER DEFAULT 2"),
+    ("email_automations", "voice_call_retry_gap_days", "INTEGER DEFAULT 3"),
+    ("email_automations", "voice_call_max_attempts", "INTEGER DEFAULT 2"),
+    ("shopper_automation_states", "voice_call_status", "VARCHAR(20)"),
+    ("shopper_automation_states", "voice_call_attempts", "INTEGER DEFAULT 0"),
+    ("shopper_automation_states", "voice_call_next_at", "TIMESTAMP WITH TIME ZONE"),
+    ("shopper_automation_states", "voice_call_outcome", "VARCHAR(20)"),
+    ("shopper_automation_states", "voice_call_last_at", "TIMESTAMP WITH TIME ZONE"),
 ]
 
 # email_automations.shop_id started out NOT NULL (one automation per shop);

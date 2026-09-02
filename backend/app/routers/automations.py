@@ -46,6 +46,13 @@ class AutomationCreate(BaseModel):
     # waves of that size, wait_days apart, for up to total_iterations waves.
     batch_size: int | None = Field(default=None, ge=1, le=1000)
     total_iterations: int = Field(default=1, ge=1, le=52)
+    # AI Voice Call Follow-Up (step 07) — off by default; see
+    # services/voice_call_scheduler.py. Inert regardless of this flag until
+    # TWILIO_ACCOUNT_SID/AUTH_TOKEN/PHONE_NUMBER are configured.
+    voice_call_enabled: bool = False
+    voice_call_delay_days: int = Field(default=2, ge=0, le=30)
+    voice_call_retry_gap_days: int = Field(default=3, ge=1, le=30)
+    voice_call_max_attempts: int = Field(default=2, ge=1, le=5)
 
 
 class ShoppersIn(BaseModel):
@@ -83,6 +90,11 @@ def _state_out(s: ShopperAutomationState) -> dict:
         "last_event": s.last_event,
         "last_event_at": iso(s.last_event_at),
         "last_email_sent_at": iso(s.last_email_sent_at),
+        "voice_call_status": s.voice_call_status,
+        "voice_call_attempts": s.voice_call_attempts,
+        "voice_call_outcome": s.voice_call_outcome,
+        "voice_call_next_at": iso(s.voice_call_next_at),
+        "voice_call_last_at": iso(s.voice_call_last_at),
     }
 
 
@@ -104,6 +116,14 @@ def _automation_out(a: EmailAutomation, with_states: bool = True) -> dict:
         "bounced": sum(1 for s in states if s.status in _BOUNCED),
         "failed": sum(1 for s in states if s.status in _FAILED),
         "stopped": sum(1 for s in states if s.status == "stopped"),
+        "voice_calls_placed": sum(1 for s in states if s.voice_call_attempts > 0),
+        "voice_call_interested": sum(1 for s in states if s.voice_call_outcome == "interested"),
+        "voice_call_not_interested": sum(1 for s in states if s.voice_call_outcome == "not_interested"),
+        "voice_call_pending": sum(
+            1
+            for s in states
+            if s.status == "completed_no_response" and s.voice_call_status in (None, "no_answer")
+        ),
     }
     out = {
         "id": str(a.id),
@@ -133,6 +153,10 @@ def _automation_out(a: EmailAutomation, with_states: bool = True) -> dict:
         "step1_template_name": a.step1_template.name if a.step1_template else None,
         "step2_template_name": a.step2_template.name if a.step2_template else None,
         "step3_template_name": a.step3_template.name if a.step3_template else None,
+        "voice_call_enabled": a.voice_call_enabled,
+        "voice_call_delay_days": a.voice_call_delay_days,
+        "voice_call_retry_gap_days": a.voice_call_retry_gap_days,
+        "voice_call_max_attempts": a.voice_call_max_attempts,
         "created_by": a.created_by,
         "created_at": iso(a.created_at),
         "dashboard": dashboard,
@@ -180,6 +204,10 @@ async def create_automation(
     automation = await engine.create_automation(
         session, user, campaign, shop, body.name.strip(), step_ids, body.wait_days, body.scheduled_start_at,
         batch_size=body.batch_size, total_iterations=body.total_iterations,
+        voice_call_enabled=body.voice_call_enabled,
+        voice_call_delay_days=body.voice_call_delay_days,
+        voice_call_retry_gap_days=body.voice_call_retry_gap_days,
+        voice_call_max_attempts=body.voice_call_max_attempts,
     )
     await session.commit()
     automation = await _load(session, automation.id)

@@ -33,6 +33,7 @@ from ..services import exporters
 from ..services import reports as reports_service
 from ..services.ai import campaign_predictor
 from ..services.audit import record_audit
+from ..services import facebook_oauth
 from ..services.distribution import DESTINATION_TYPES, default_account_name
 from .campaigns import (
     _campaign_outreach,
@@ -490,6 +491,13 @@ async def list_social_accounts(
             "connected": ptype in connected,
             "account_name": connected[ptype].account_name if ptype in connected else None,
             "connected_at": connected[ptype].connected_at.isoformat() if ptype in connected else None,
+            # Only "facebook" can ever be a real OAuth connection today — see
+            # services/facebook_oauth.py. Every other platform stays
+            # simulated (status defaults to "connected" the moment the demo
+            # "Connect" flow creates the row, with no token fields set).
+            "status": connected[ptype].status if ptype in connected else None,
+            "is_real_connection": bool(connected[ptype].access_token_encrypted) if ptype in connected else False,
+            "needs_reconnect": (connected[ptype].status == "expired") if ptype in connected else False,
         }
         for ptype, label in DESTINATION_TYPES
     ]
@@ -510,6 +518,11 @@ async def connect_social_account(
     valid_platforms = {p for p, _ in DESTINATION_TYPES}
     if body.platform not in valid_platforms:
         raise HTTPException(status_code=400, detail=f"Unknown platform: {body.platform}")
+    if body.platform == "facebook" and facebook_oauth.is_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Real Facebook OAuth is configured — use Connect Facebook (GET /api/social/facebook/connect) instead of the demo connect.",
+        )
 
     client = await session.get(Client, user.client_id)
     existing_stmt = select(ClientSocialAccount).where(

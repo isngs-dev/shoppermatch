@@ -26,6 +26,19 @@ const STATE_BADGE: Record<string, string> = {
   completed_failed: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
 };
 
+const VOICE_CALL_BADGE: Record<string, string> = {
+  interested: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  not_interested: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  undecided: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  voicemail: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+  calling: "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  queued: "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  no_answer: "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400",
+  failed: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  completed: "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300",
+  default: "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400",
+};
+
 function cap(s: string) {
   return (s || "").split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
@@ -230,6 +243,16 @@ function AutomationBuilder({
   const iterations = Math.max(1, parseInt(iterationsInput, 10) || 1);
   const [scheduleUpcoming, setScheduleUpcoming] = useState(initialCampaignType === "upcoming");
   const [scheduledAt, setScheduledAt] = useState("");
+  // AI Voice Call Follow-Up (step 07) — off by default; the email sequence
+  // behaves identically either way. Only fires once a shopper exhausts
+  // every email step with no reply — see services/voice_call_scheduler.py.
+  const [voiceCallEnabled, setVoiceCallEnabled] = useState(false);
+  const [voiceCallDelayInput, setVoiceCallDelayInput] = useState("2");
+  const [voiceCallRetryGapInput, setVoiceCallRetryGapInput] = useState("3");
+  const [voiceCallMaxAttemptsInput, setVoiceCallMaxAttemptsInput] = useState("2");
+  const voiceCallDelayDays = Math.max(0, parseInt(voiceCallDelayInput, 10) || 0);
+  const voiceCallRetryGapDays = Math.max(1, parseInt(voiceCallRetryGapInput, 10) || 1);
+  const voiceCallMaxAttempts = Math.max(1, parseInt(voiceCallMaxAttemptsInput, 10) || 1);
   const templatesApi = useApi(() => api.emailTemplates());
   // Batch emailing ties step count to wave count: each wave gets its own
   // distinct email instead of everyone sharing the same fixed 3-step
@@ -323,6 +346,10 @@ function AutomationBuilder({
         scheduled_start_at: scheduleUpcoming && scheduledAt ? new Date(scheduledAt).toISOString() : null,
         batch_size: batchEnabled ? batchSize : null,
         total_iterations: batchEnabled ? iterations : 1,
+        voice_call_enabled: voiceCallEnabled,
+        voice_call_delay_days: voiceCallDelayDays,
+        voice_call_retry_gap_days: voiceCallRetryGapDays,
+        voice_call_max_attempts: voiceCallMaxAttempts,
       });
       await api.addAutomationShoppers(
         automation.id,
@@ -447,6 +474,55 @@ function AutomationBuilder({
           )}
         </div>
 
+        <div className="mt-4 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+          <label className="label flex items-center gap-2">
+            <input type="checkbox" checked={voiceCallEnabled} onChange={(e) => setVoiceCallEnabled(e.target.checked)} />
+            AI Voice Call Follow-Up
+          </label>
+          <p className="mt-1 text-[11px] text-slate-400">
+            If a shopper never replies to any of the email steps above, place a real phone call — an AI
+            voice conversation asks whether they're still interested. Requires Twilio to be configured
+            server-side; if it isn't, this stays off with no effect on the email sequence.
+          </p>
+          {voiceCallEnabled && (
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <div>
+                <label className="label">Wait after last email (days)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={30}
+                  className="input"
+                  value={voiceCallDelayInput}
+                  onChange={(e) => setVoiceCallDelayInput(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label">Retry gap if unanswered (days)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  className="input"
+                  value={voiceCallRetryGapInput}
+                  onChange={(e) => setVoiceCallRetryGapInput(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label">Max call attempts</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  className="input"
+                  value={voiceCallMaxAttemptsInput}
+                  onChange={(e) => setVoiceCallMaxAttemptsInput(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
         <div className="mt-4">
           <div className="label">
             Email steps{batchEnabled ? " (one per wave — change Iterations above to add or remove steps)" : ""}
@@ -549,6 +625,7 @@ export function AutomationDetailPage() {
   const { data, loading, error, reload } = useApi(() => api.automation(automationId!), [automationId]);
   const [busy, setBusy] = useState<string | null>(null);
   const [previewFor, setPreviewFor] = useState<{ shopperId: string; step: number } | null>(null);
+  const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
 
   useEffect(() => {
     const id = window.setInterval(reload, 6000);
@@ -648,6 +725,25 @@ export function AutomationDetailPage() {
         <KpiCard label="Pending" value={d.pending} accent="slate" />
       </div>
 
+      {data.voice_call_enabled && (
+        <div className="card p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+              📞 AI Voice Call Follow-Up
+            </h3>
+            <span className="text-[11px] text-slate-400">
+              Wait {data.voice_call_delay_days}d after last email · retry every {data.voice_call_retry_gap_days}d · up to {data.voice_call_max_attempts} attempt(s)
+            </span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <KpiCard label="Calls Placed" value={d.voice_calls_placed} accent="indigo" />
+            <KpiCard label="Interested" value={d.voice_call_interested} accent="emerald" />
+            <KpiCard label="Not Interested" value={d.voice_call_not_interested} accent="rose" />
+            <KpiCard label="Awaiting Call" value={d.voice_call_pending} accent="amber" />
+          </div>
+        </div>
+      )}
+
       <div className="card overflow-x-auto !p-0">
         <table className="min-w-full text-sm">
           <thead className="border-b border-slate-100 dark:border-slate-800">
@@ -658,6 +754,7 @@ export function AutomationDetailPage() {
               <th className="th">Last Event</th>
               <th className="th hidden lg:table-cell">Last Sent</th>
               <th className="th hidden lg:table-cell">Next Action</th>
+              {data.voice_call_enabled && <th className="th">Voice Call</th>}
               <th className="th">Preview</th>
             </tr>
           </thead>
@@ -675,6 +772,23 @@ export function AutomationDetailPage() {
                 <td className="td text-slate-500">{s.last_event ? cap(s.last_event) : "—"}</td>
                 <td className="td hidden text-slate-500 lg:table-cell">{s.last_email_sent_at ? fmtDateTime(s.last_email_sent_at) : "—"}</td>
                 <td className="td hidden text-slate-500 lg:table-cell">{s.next_action_at ? fmtDateTime(s.next_action_at) : "—"}</td>
+                {data.voice_call_enabled && (
+                  <td className="td">
+                    {s.voice_call_status ? (
+                      <button
+                        className="text-left"
+                        onClick={() => setTranscriptFor(s.id)}
+                        title="View call transcript"
+                      >
+                        <Badge className={VOICE_CALL_BADGE[s.voice_call_outcome || s.voice_call_status] || VOICE_CALL_BADGE.default}>
+                          {s.voice_call_outcome ? cap(s.voice_call_outcome.replace("_", " ")) : cap(s.voice_call_status.replace("_", " "))}
+                        </Badge>
+                      </button>
+                    ) : (
+                      <span className="text-slate-300 dark:text-slate-600">—</span>
+                    )}
+                  </td>
+                )}
                 <td className="td">
                   <select
                     className="input h-8 w-28 text-xs"
@@ -694,7 +808,7 @@ export function AutomationDetailPage() {
             ))}
             {data.shoppers.length === 0 && (
               <tr>
-                <td colSpan={7} className="td py-8 text-center text-slate-400">No shoppers in this automation.</td>
+                <td colSpan={data.voice_call_enabled ? 8 : 7} className="td py-8 text-center text-slate-400">No shoppers in this automation.</td>
               </tr>
             )}
           </tbody>
@@ -707,6 +821,14 @@ export function AutomationDetailPage() {
           shopperId={previewFor.shopperId}
           step={previewFor.step}
           onClose={() => setPreviewFor(null)}
+        />
+      )}
+
+      {transcriptFor && (
+        <VoiceCallTranscriptModal
+          automationId={automationId!}
+          automationStateId={transcriptFor}
+          onClose={() => setTranscriptFor(null)}
         />
       )}
     </div>
@@ -733,6 +855,70 @@ function EmailPreviewModal({ automationId, shopperId, step, onClose }: { automat
           </>
         )}
         <div className="border-t border-slate-200 p-3 text-right dark:border-slate-800">
+          <button className="btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VoiceCallTranscriptModal({
+  automationId,
+  automationStateId,
+  onClose,
+}: {
+  automationId: string;
+  automationStateId: string;
+  onClose: () => void;
+}) {
+  const { data, loading, error } = useApi(() => api.automationVoiceCalls(automationId), [automationId]);
+  const attempts = (data?.items || []).filter((l: any) => l.automation_state_id === automationStateId);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-5 shadow-2xl dark:bg-slate-900">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">Voice Call History</h3>
+          <button className="btn-ghost" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        {loading && !data ? (
+          <div className="p-8"><Spinner /></div>
+        ) : error ? (
+          <div className="p-4 text-sm text-rose-500">{error}</div>
+        ) : attempts.length === 0 ? (
+          <p className="p-4 text-sm text-slate-400">No call attempts yet.</p>
+        ) : (
+          <div className="mt-3 space-y-4">
+            {attempts.map((call: any) => (
+              <div key={call.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                  <span>{fmtDateTime(call.attempted_at)}</span>
+                  <div className="flex items-center gap-2">
+                    <Badge className={VOICE_CALL_BADGE[call.outcome || call.status] || VOICE_CALL_BADGE.default}>
+                      {call.outcome ? cap(call.outcome.replace("_", " ")) : cap(call.status.replace("_", " "))}
+                    </Badge>
+                    {call.duration_seconds != null && <span>{call.duration_seconds}s</span>}
+                  </div>
+                </div>
+                {call.error_message && (
+                  <p className="mt-2 text-xs font-medium text-rose-600 dark:text-rose-400">{call.error_message}</p>
+                )}
+                {call.transcript?.length > 0 && (
+                  <div className="mt-2 space-y-1.5">
+                    {call.transcript.map((turn: any, i: number) => (
+                      <div key={i} className={classNames("text-xs", turn.role === "assistant" ? "text-slate-700 dark:text-slate-200" : "text-brand-600 dark:text-brand-400")}>
+                        <span className="font-semibold">{turn.role === "assistant" ? "AI: " : "Shopper: "}</span>
+                        {turn.text}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="mt-3 border-t border-slate-200 pt-3 text-right dark:border-slate-800">
           <button className="btn-secondary" onClick={onClose}>Close</button>
         </div>
       </div>
