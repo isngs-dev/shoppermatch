@@ -375,6 +375,7 @@ function RecommendationsTab({
   const [approving, setApproving] = useState(false);
   const [togglingOverSelection, setTogglingOverSelection] = useState(false);
   const [bonusShop, setBonusShop] = useState<any | null>(null);
+  const [bonusSuggestion, setBonusSuggestion] = useState<{ amount: number; note: string } | null>(null);
   const toast = useToast();
 
   const shopDetail = useApi(() => (shopId ? api.shop(shopId) : Promise.resolve(null)), [shopId]);
@@ -505,6 +506,21 @@ function RecommendationsTab({
     shortlist === "all" ? shortlisted : shortlisted.slice(0, shortlist === "top5" ? 5 : 10);
   const gap = required - topAndStrong.length;
 
+  // A bonus only makes sense when the eligible pool itself is thin — if
+  // there are plenty of eligible shoppers nearby but few ranked top/strong,
+  // the actual fix is broader outreach (radius/potential matches), not
+  // paying more. "Thin pool" here means even every eligible shopper,
+  // regardless of match quality, wouldn't comfortably cover the requirement.
+  const poolIsThin =
+    !!result && required > 0 && (result.eligible_count <= required * 2 || topAndStrong.length === 0);
+  const suggestedBonus =
+    result && gap > 0 && poolIsThin && selectedShop && !selectedShop.bonus && selectedShop.compensation
+      ? {
+          amount: Math.max(50, Math.round((selectedShop.compensation * (0.2 + 0.3 * Math.min(1, gap / required))) / 50) * 50),
+          note: `AI-suggested — recruitment gap of ${gap} shopper(s) with only ${result.eligible_count} eligible nearby.`,
+        }
+      : null;
+
   return (
     <div className="space-y-5">
       <div>
@@ -583,6 +599,27 @@ function RecommendationsTab({
               {showMore ? "Showing Potential Matches" : "Show Potential Matches"}
             </button>
           </div>
+
+          {suggestedBonus && (
+            <div className="mt-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3 dark:border-indigo-900 dark:bg-indigo-950/30">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm text-indigo-800 dark:text-indigo-300">
+                  🤖 <span className="font-semibold">AI suggests a {fmtMoney(suggestedBonus.amount, selectedShop.currency)} bonus</span> —
+                  the eligible pool here is thin ({result.eligible_count} eligible for {required} needed), so a
+                  bonus is more likely to convert reluctant shoppers than a wider search.
+                </p>
+                <button
+                  className="btn-primary shrink-0"
+                  onClick={() => {
+                    setBonusSuggestion(suggestedBonus);
+                    setBonusShop(selectedShop);
+                  }}
+                >
+                  Add Suggested Bonus
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -772,7 +809,11 @@ function RecommendationsTab({
         <BonusModal
           shop={bonusShop}
           campaignId={campaignId}
-          onClose={() => setBonusShop(null)}
+          suggestion={bonusSuggestion}
+          onClose={() => {
+            setBonusShop(null);
+            setBonusSuggestion(null);
+          }}
           onSaved={() => shops.reload()}
         />
       )}
@@ -787,18 +828,20 @@ function RecommendationsTab({
 function BonusModal({
   shop,
   campaignId,
+  suggestion,
   onClose,
   onSaved,
 }: {
   shop: any;
   campaignId: string;
+  suggestion?: { amount: number; note: string } | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const toast = useToast();
   const existing = shop.bonus;
-  const [amount, setAmount] = useState(existing ? String(existing.amount) : "");
-  const [note, setNote] = useState(existing?.note || "");
+  const [amount, setAmount] = useState(existing ? String(existing.amount) : suggestion ? String(suggestion.amount) : "");
+  const [note, setNote] = useState(existing?.note || suggestion?.note || "");
   const [busy, setBusy] = useState(false);
   const awarded = !!existing?.completed_at;
 
@@ -848,6 +891,11 @@ function BonusModal({
           </button>
         </div>
 
+        {!existing && suggestion && (
+          <p className="mt-2 text-xs font-medium text-indigo-600 dark:text-indigo-400">
+            🤖 Amount and note pre-filled from the AI's suggestion — edit either before saving.
+          </p>
+        )}
         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
           Extra incentive on top of standard compensation, funded and paid by you directly to the shopper —
           ShopperMatch does not process this payment. Whichever shopper completes this shop receives it, and
