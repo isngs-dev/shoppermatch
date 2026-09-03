@@ -204,16 +204,6 @@ export const api = {
   generateSocialPostText: (id: string, body: Record<string, any>) =>
     request(`/api/social/posts/${id}/generate`, { method: "POST", body }),
   generateSocialPostImage: (id: string) => request(`/api/social/posts/${id}/generate-image`, { method: "POST" }),
-  socialPostLogs: (id: string) => request(`/api/social/posts/${id}/logs`),
-  socialCalendar: (start: string, end: string) =>
-    request("/api/social/calendar" + qs({ start, end })),
-  socialAutomationRules: () => request("/api/social/automation-rules"),
-  createSocialAutomationRule: (body: Record<string, any>) =>
-    request("/api/social/automation-rules", { method: "POST", body }),
-  updateSocialAutomationRule: (id: string, body: Record<string, any>) =>
-    request(`/api/social/automation-rules/${id}`, { method: "PATCH", body }),
-  deleteSocialAutomationRule: (id: string) =>
-    request(`/api/social/automation-rules/${id}`, { method: "DELETE" }),
 
   setShopBonus: (campaignId: string, shopId: string, amount: number, note?: string) =>
     request(`/api/campaigns/${campaignId}/shops/${shopId}/bonus`, {

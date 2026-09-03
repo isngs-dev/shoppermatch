@@ -12,17 +12,17 @@ import uuid
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from app.config import settings
 from app.database import AsyncSessionLocal, Base, engine
 from app.main import app
-from app.models import Client, ClientSocialAccount, DistributionPost, Shop, SocialAutomationRule, User
+from app.models import Client, ClientSocialAccount, DistributionPost, SocialPublishingLog, User
 from app.security import create_access_token, hash_password
 from app.seed import maybe_seed
 from app.services import facebook_oauth
 from app.services.crypto import decrypt_token, encrypt_token
 from app.services.facebook_graph import FacebookPublishError
-from app.services.social_automation import process_automation_rules
 from app.services.social_publisher import _claim_for_publishing, attempt_publish, process_due_social_posts
 from app.services.tracking import now
 
@@ -325,11 +325,15 @@ async def test_publish_now_success_records_external_post_id_and_log(monkeypatch)
         assert body["status"] == "posted"
         assert body["external_post_id"] == "page-1_998877"
 
-        logs = await client.get(f"/api/social/posts/{post_id}/logs", headers=auth)
-        items = logs.json()["items"]
-        assert len(items) == 1
-        assert items[0]["status"] == "success"
-        assert items[0]["external_post_id"] == "page-1_998877"
+    async with AsyncSessionLocal() as session:
+        logs = (
+            await session.execute(
+                select(SocialPublishingLog).where(SocialPublishingLog.post_id == uuid.UUID(post_id))
+            )
+        ).scalars().all()
+        assert len(logs) == 1
+        assert logs[0].status == "success"
+        assert logs[0].external_post_id == "page-1_998877"
 
 
 @pytest.mark.asyncio
@@ -382,9 +386,13 @@ async def test_scheduled_publish_retries_then_fails_after_max_attempts(monkeypat
         assert post.retry_count == 2
         assert post.error_message
 
-    async with _client() as client:
-        logs = await client.get(f"/api/social/posts/{post_id}/logs", headers=auth)
-        assert len(logs.json()["items"]) == 2
+    async with AsyncSessionLocal() as session:
+        logs = (
+            await session.execute(
+                select(SocialPublishingLog).where(SocialPublishingLog.post_id == uuid.UUID(post_id))
+            )
+        ).scalars().all()
+        assert len(logs) == 2
 
 
 @pytest.mark.asyncio
@@ -461,279 +469,3 @@ async def test_publish_fails_cleanly_with_no_connected_account():
         assert check.json()["status"] == "draft"
 
 
-# --------------------------------------------------------------------------- #
-# Templates
-# --------------------------------------------------------------------------- #
-@pytest.mark.asyncio
-async def test_template_create_and_render_from_campaign():
-    await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
-
-    async with _client() as client:
-        create = await client.post(
-            "/api/social/templates",
-            headers=auth,
-            json={"name": "T1", "body_template": "{{title}} - {{location}}"},
-        )
-        template_id = create.json()["id"]
-        rendered = await client.post(
-            f"/api/social/templates/{template_id}/render",
-            headers=auth,
-            json={"campaign_id": campaign["id"], "source_type": "campaign"},
-        )
-        assert rendered.status_code == 200
-        text = rendered.json()["rendered"]
-        assert campaign["name"] in text
-        assert "{{" not in text
-
-
-# --------------------------------------------------------------------------- #
-# Automation Rules
-# --------------------------------------------------------------------------- #
-async def _add_shop(campaign_id: str, *, status: str = "open", created_at=None) -> str:
-    async with AsyncSessionLocal() as session:
-        shop = Shop(
-            campaign_id=uuid.UUID(campaign_id),
-            shop_name=f"Test Shop {uuid.uuid4().hex[:6]}",
-            city="Testville",
-            state="Teststate",
-            compensation=500,
-            status=status,
-            created_at=created_at or now(),
-        )
-        session.add(shop)
-        await session.commit()
-        return str(shop.id)
-
-
-@pytest.mark.asyncio
-async def test_automation_rule_generates_post_for_new_matching_shop():
-    await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
-
-    async with _client() as client:
-        create_rule = await client.post(
-            "/api/social/automation-rules",
-            headers=auth,
-            json={
-                "name": "New open shops",
-                "trigger": "shop_created",
-                "conditions": {"status": "open"},
-                "destination_type": "facebook",
-                "target_kind": "page",
-            },
-        )
-        assert create_rule.status_code == 200, create_rule.text
-        rule_id = create_rule.json()["id"]
-
-    # A shop created AFTER the rule existed, matching the condition.
-    await _add_shop(campaign["id"], status="open")
-
-    generated = await process_automation_rules()
-    assert generated == 1
-
-    async with _client() as client:
-        posts = await client.get("/api/social/posts", headers=auth, params={"campaign_id": campaign["id"]})
-        items = posts.json()["items"]
-        assert len(items) == 1
-        assert items[0]["status"] == "pending_approval"  # requires_approval defaults True
-        assert items[0]["source_type"] == "shop"
-        assert "Test Shop" in items[0]["message"]
-
-        rules = await client.get("/api/social/automation-rules", headers=auth)
-        assert rules.json()["items"][0]["last_run_at"] is not None
-
-
-@pytest.mark.asyncio
-async def test_automation_rule_ignores_shops_that_predate_it():
-    await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
-
-    # Shop created BEFORE the rule exists — must never be picked up
-    # (enabling a rule must not retroactively flood every existing record).
-    await _add_shop(campaign["id"], status="open")
-
-    async with _client() as client:
-        await client.post(
-            "/api/social/automation-rules",
-            headers=auth,
-            json={"name": "R", "trigger": "shop_created", "conditions": {"status": "open"}, "destination_type": "facebook"},
-        )
-
-    generated = await process_automation_rules()
-    assert generated == 0
-
-
-@pytest.mark.asyncio
-async def test_automation_rule_condition_mismatch_skips_post():
-    await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
-
-    async with _client() as client:
-        await client.post(
-            "/api/social/automation-rules",
-            headers=auth,
-            json={
-                "name": "R",
-                "trigger": "shop_created",
-                "conditions": {"status": "active"},  # shops are never "active" — always mismatches
-                "destination_type": "facebook",
-            },
-        )
-
-    await _add_shop(campaign["id"], status="open")
-    generated = await process_automation_rules()
-    assert generated == 0
-
-
-@pytest.mark.asyncio
-async def test_automation_rule_auto_schedules_only_with_connected_account_and_schedule_time():
-    await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
-
-    async with _client() as client:
-        me = (await client.get("/api/auth/me", headers=auth)).json()
-        # No account connected yet -> even with requires_approval off, must
-        # safely fall back to pending_approval rather than drop the post.
-        create_rule = await client.post(
-            "/api/social/automation-rules",
-            headers=auth,
-            json={
-                "name": "Auto-schedule",
-                "trigger": "shop_created",
-                "conditions": {},
-                "destination_type": "facebook",
-                "requires_approval": False,
-                "schedule_time": "09:00",
-            },
-        )
-        assert create_rule.status_code == 200, create_rule.text
-
-    await _add_shop(campaign["id"])
-    generated = await process_automation_rules()
-    assert generated == 1
-    async with _client() as client:
-        items = (await client.get("/api/social/posts", headers=auth)).json()["items"]
-        assert items[0]["status"] == "pending_approval"
-
-    # Now connect a real account and let a SECOND new shop through — this
-    # one must auto-schedule.
-    await _connected_facebook_account(me["client_id"])
-    await _add_shop(campaign["id"])
-    generated = await process_automation_rules()
-    assert generated == 1
-    async with _client() as client:
-        items = (await client.get("/api/social/posts", headers=auth)).json()["items"]
-        scheduled = [p for p in items if p["status"] == "scheduled"]
-        assert len(scheduled) == 1
-        assert scheduled[0]["scheduled_at"] is not None
-
-
-@pytest.mark.asyncio
-async def test_automation_rule_group_target_always_manual_even_without_approval():
-    await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
-
-    async with _client() as client:
-        await client.post(
-            "/api/social/automation-rules",
-            headers=auth,
-            json={
-                "name": "Group rule",
-                "trigger": "shop_created",
-                "destination_type": "facebook",
-                "target_kind": "group",
-                "target_ref": "https://facebook.com/groups/test",
-                "requires_approval": False,
-                "schedule_time": "09:00",
-            },
-        )
-
-    await _add_shop(campaign["id"])
-    generated = await process_automation_rules()
-    assert generated == 1
-    async with _client() as client:
-        items = (await client.get("/api/social/posts", headers=auth)).json()["items"]
-        assert items[0]["status"] == "manual_required"
-        assert items[0]["requires_manual_posting"] is True
-
-
-@pytest.mark.asyncio
-async def test_automation_rule_requires_schedule_time_when_approval_disabled():
-    await _fresh_db()
-    auth = await _nike_client_auth()
-    async with _client() as client:
-        r = await client.post(
-            "/api/social/automation-rules",
-            headers=auth,
-            json={"name": "Bad rule", "trigger": "shop_created", "destination_type": "facebook", "requires_approval": False},
-        )
-        assert r.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_automation_rule_crud_permission_isolation():
-    await _fresh_db()
-    auth = await _nike_client_auth()
-    other_auth = await _second_client_auth()
-
-    async with _client() as client:
-        created = await client.post(
-            "/api/social/automation-rules",
-            headers=auth,
-            json={"name": "Mine", "trigger": "shop_created", "destination_type": "facebook"},
-        )
-        rule_id = created.json()["id"]
-
-        cross_update = await client.patch(
-            f"/api/social/automation-rules/{rule_id}",
-            headers=other_auth,
-            json={"name": "Hijacked", "trigger": "shop_created", "destination_type": "facebook"},
-        )
-        assert cross_update.status_code == 404
-
-        cross_delete = await client.delete(f"/api/social/automation-rules/{rule_id}", headers=other_auth)
-        assert cross_delete.status_code == 404
-
-        own_list = await client.get("/api/social/automation-rules", headers=auth)
-        assert len(own_list.json()["items"]) == 1
-        other_list = await client.get("/api/social/automation-rules", headers=other_auth)
-        assert len(other_list.json()["items"]) == 0
-
-
-# --------------------------------------------------------------------------- #
-# Calendar
-# --------------------------------------------------------------------------- #
-@pytest.mark.asyncio
-async def test_calendar_returns_scheduled_posts_in_range():
-    await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
-
-    async with _client() as client:
-        me = (await client.get("/api/auth/me", headers=auth)).json()
-        await _connected_facebook_account(me["client_id"])
-        create = await client.post(
-            "/api/social/posts",
-            headers=auth,
-            json={"campaign_id": campaign["id"], "source_type": "campaign", "destination_type": "facebook", "target_kind": "page", "message": "x"},
-        )
-        post_id = create.json()["id"]
-        await client.post(f"/api/social/posts/{post_id}/schedule", headers=auth, json={"scheduled_at": "2027-06-15T10:00:00Z"})
-
-        in_range = await client.get(
-            "/api/social/calendar", headers=auth, params={"start": "2027-06-01T00:00:00Z", "end": "2027-07-01T00:00:00Z"}
-        )
-        assert in_range.status_code == 200
-        assert len(in_range.json()["items"]) == 1
-
-        out_of_range = await client.get(
-            "/api/social/calendar", headers=auth, params={"start": "2026-01-01T00:00:00Z", "end": "2026-02-01T00:00:00Z"}
-        )
-        assert len(out_of_range.json()["items"]) == 0

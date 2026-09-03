@@ -1,11 +1,10 @@
 """Idempotent seed extension: populates the Social Media page (Posts,
-Calendar, Templates, Automation, Connected Accounts) for the Nike demo
-client so it can be shown as a working example instead of an empty state.
+Connected Accounts) for the Nike demo client so it can be shown as a
+working example instead of an empty state.
 
 Does NOT touch or delete any existing row — every record here is looked up
-by a stable identifying field first (platform for connected accounts, name
-for templates/rules, a fixed marker for posts) and skipped if already
-present.
+by a stable identifying field first (platform for connected accounts, a
+fixed marker for posts) and skipped if already present.
 
 Run:
     python -m app.seed_social_demo
@@ -20,15 +19,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from .database import AsyncSessionLocal, init_models
-from .models import (
-    Campaign,
-    Client,
-    ClientSocialAccount,
-    DistributionPost,
-    Shop,
-    SocialAutomationRule,
-    SocialPostTemplate,
-)
+from .models import Campaign, Client, ClientSocialAccount, DistributionPost, Shop
 from .services.distribution import generate_post_image
 
 
@@ -71,47 +62,6 @@ async def _build_accounts(session, client: Client) -> list[str]:
             )
         )
         created.append(platform)
-    return created
-
-
-async def _build_templates(session, client: Client) -> list[str]:
-    existing = {
-        n for n in (
-            await session.execute(
-                select(SocialPostTemplate.name).where(SocialPostTemplate.client_id == client.id)
-            )
-        ).scalars().all()
-    }
-    created = []
-    templates = [
-        (
-            "New Shop Opening — Recruitment",
-            "facebook",
-            "We're hiring mystery shoppers for {{shop_name}} in {{city}}! "
-            "Earn {{currency}} {{compensation}} for a quick visit. "
-            "Apply now — spots are limited. #{{campaign_name}}",
-        ),
-        (
-            "Campaign Launch Announcement",
-            None,
-            "{{campaign_name}} is now live across {{city}}! We're looking for "
-            "shoppers to help us evaluate the in-store experience. "
-            "Sign up today and get paid to shop.",
-        ),
-    ]
-    for name, platform, body in templates:
-        if name in existing:
-            continue
-        session.add(
-            SocialPostTemplate(
-                client_id=client.id,
-                name=name,
-                platform=platform,
-                body_template=body,
-                created_by="Nike Brand Team",
-            )
-        )
-        created.append(name)
     return created
 
 
@@ -181,7 +131,7 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
             scheduled_at=now + timedelta(days=1, hours=3),
             timezone="Asia/Kolkata",
         ),
-        # Pending approval — from an automation rule, awaiting review.
+        # Draft, awaiting review before scheduling/publishing.
         DistributionPost(
             campaign=campaign,
             source_type="campaign",
@@ -192,7 +142,7 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
             target_ref="demo-instagram-page-id",
             message="New opportunity in Nashik! Join our mystery shopper program for Nike Mumbai Store Audit.",
             status="pending_approval",
-            posted_by="Automation: New Shop Opening",
+            posted_by="Nike Brand Team",
         ),
         # A Facebook Group post — always manual per Meta's API limits.
         DistributionPost(
@@ -210,56 +160,6 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
     ]
     session.add_all(posts)
     return len(posts)
-
-
-async def _build_rules(session, client: Client, templates_by_name: dict[str, object]) -> list[str]:
-    existing = {
-        n for n in (
-            await session.execute(
-                select(SocialAutomationRule.name).where(SocialAutomationRule.client_id == client.id)
-            )
-        ).scalars().all()
-    }
-    created = []
-    rules = [
-        SocialAutomationRule(
-            client_id=client.id,
-            name="New Shop Opening",
-            enabled=True,
-            trigger="shop_created",
-            conditions={"status": "open"},
-            destination_type="facebook",
-            target_kind="page",
-            target_ref="demo-facebook-page-id",
-            template_id=templates_by_name.get("New Shop Opening — Recruitment"),
-            use_ai=False,
-            requires_approval=True,
-            created_by="Nike Brand Team",
-        ),
-        SocialAutomationRule(
-            client_id=client.id,
-            name="Campaign Launch — AI Post",
-            enabled=True,
-            trigger="campaign_created",
-            conditions={},
-            destination_type="instagram",
-            target_kind="page",
-            target_ref="demo-instagram-page-id",
-            use_ai=True,
-            ai_tone="friendly",
-            ai_language="English",
-            requires_approval=False,
-            schedule_time="09:00",
-            timezone="Asia/Kolkata",
-            created_by="Nike Brand Team",
-        ),
-    ]
-    for rule in rules:
-        if rule.name in existing:
-            continue
-        session.add(rule)
-        created.append(rule.name)
-    return created
 
 
 async def _build_images(session, campaign: Campaign) -> int:
@@ -289,28 +189,14 @@ async def run() -> None:
     async with AsyncSessionLocal() as session:
         client, campaign, shops = await _get_nike(session)
         accounts_created = await _build_accounts(session, client)
-        templates_created = await _build_templates(session, client)
-        await session.flush()
-
-        templates_by_name = {
-            t.name: t.id
-            for t in (
-                await session.execute(
-                    select(SocialPostTemplate).where(SocialPostTemplate.client_id == client.id)
-                )
-            ).scalars().all()
-        }
         posts_created = await _build_posts(session, campaign, shops)
-        rules_created = await _build_rules(session, client, templates_by_name)
         await session.commit()
 
         images_generated = await _build_images(session, campaign)
         await session.commit()
 
     print(f"Connected accounts created: {accounts_created or 'none (already present)'}")
-    print(f"Templates created: {templates_created or 'none (already present)'}")
     print(f"Posts created: {posts_created}")
-    print(f"Automation rules created: {rules_created or 'none (already present)'}")
     print(f"Post images generated: {images_generated}")
 
 
