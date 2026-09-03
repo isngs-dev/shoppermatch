@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -526,12 +526,22 @@ async def analyze_document_endpoint(
     return {"text": text}
 
 
+class GenerateImageRequest(BaseModel):
+    # A free-text prompt the client typed themselves — when set, this fully
+    # replaces the auto-built campaign/message prompt rather than merging
+    # with it (see services/distribution.py::generate_post_image).
+    prompt: str | None = Field(default=None, max_length=1000)
+
+
 @router.post("/posts/{post_id}/generate-image")
 async def generate_post_image_endpoint(
-    post_id: uuid.UUID, session: AsyncSession = Depends(get_session), user: User = Depends(require_client)
+    post_id: uuid.UUID,
+    body: GenerateImageRequest = GenerateImageRequest(),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
 ):
     post = await _require_post(session, post_id, user)
-    image_url = await generate_post_image(post.campaign.name, post.message)
+    image_url = await generate_post_image(post.campaign.name, post.message, custom_prompt=body.prompt or None)
     post.image_url = image_url
     await session.commit()
     return _post_out(post)
@@ -541,6 +551,7 @@ async def generate_post_image_endpoint(
 async def generate_post_image_from_photo_endpoint(
     post_id: uuid.UUID,
     photo: UploadFile = File(...),
+    prompt: str | None = Form(default=None, max_length=1000),
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_client),
 ):
@@ -551,7 +562,8 @@ async def generate_post_image_from_photo_endpoint(
     if len(content) > _MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="Photo must be smaller than 10 MB.")
     image_url = await generate_post_image_from_photo(
-        post.campaign.name, post.message, content, photo.filename or "photo.png", photo.content_type
+        post.campaign.name, post.message, content, photo.filename or "photo.png", photo.content_type,
+        custom_prompt=prompt or None,
     )
     post.image_url = image_url
     await session.commit()

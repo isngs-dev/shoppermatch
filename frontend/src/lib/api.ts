@@ -205,15 +205,17 @@ export const api = {
   markSocialPostPosted: (id: string) => request(`/api/social/posts/${id}/mark-posted`, { method: "POST" }),
   generateSocialPostText: (id: string, body: Record<string, any>) =>
     request(`/api/social/posts/${id}/generate`, { method: "POST", body }),
-  generateSocialPostImage: (id: string) => request(`/api/social/posts/${id}/generate-image`, { method: "POST" }),
+  generateSocialPostImage: (id: string, prompt?: string) =>
+    request(`/api/social/posts/${id}/generate-image`, { method: "POST", body: { prompt: prompt || undefined } }),
   analyzeSocialPostDocument: (id: string, file: File) => {
     const form = new FormData();
     form.append("document", file);
     return uploadRequest(`/api/social/posts/${id}/analyze-document`, form);
   },
-  generateSocialPostImageFromPhoto: (id: string, file: File) => {
+  generateSocialPostImageFromPhoto: (id: string, file: File, prompt?: string) => {
     const form = new FormData();
     form.append("photo", file);
+    if (prompt) form.append("prompt", prompt);
     return uploadRequest(`/api/social/posts/${id}/generate-image-from-photo`, form);
   },
 

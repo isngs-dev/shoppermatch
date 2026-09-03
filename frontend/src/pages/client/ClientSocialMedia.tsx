@@ -264,6 +264,9 @@ function ComposerModal({
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [documentText, setDocumentText] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [imagePromptOpen, setImagePromptOpen] = useState(false);
+  const [imagePrompt, setImagePrompt] = useState("");
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const shops = useApi(() => (campaignId ? api.campaignShops(campaignId) : Promise.resolve({ items: [] })), [campaignId]);
   const accounts = useApi(() => api.clientSocialAccounts());
@@ -329,8 +332,8 @@ function ComposerModal({
     setBusy("image");
     try {
       const res = photoFile
-        ? await api.generateSocialPostImageFromPhoto(post.id, photoFile)
-        : await api.generateSocialPostImage(post.id);
+        ? await api.generateSocialPostImageFromPhoto(post.id, photoFile, imagePrompt || undefined)
+        : await api.generateSocialPostImage(post.id, imagePrompt || undefined);
       setImageUrl(res.image_url);
       toast("Image generated.", "success");
     } catch (e: any) {
@@ -473,6 +476,9 @@ function ComposerModal({
               <button type="button" className="btn-secondary h-8 px-2.5 text-xs" onClick={generateImage} disabled={busy === "image"}>
                 {busy === "image" ? <Spinner className="h-3.5 w-3.5" /> : null} Generate Image
               </button>
+              <button type="button" className="btn-secondary h-8 px-2.5 text-xs" onClick={() => setImagePromptOpen((v) => !v)}>
+                ✏️ Custom Prompt{imagePrompt ? " ✓" : ""}
+              </button>
               <label className="btn-secondary h-8 cursor-pointer px-2.5 text-xs">
                 {busy === "document" ? <Spinner className="h-3.5 w-3.5" /> : null} 📎 Attach Document
                 <input
@@ -533,6 +539,22 @@ function ComposerModal({
                 )}
               </div>
             )}
+            {imagePromptOpen && (
+              <div className="mt-2 space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                <label className="label !mb-0">Custom image prompt</label>
+                <textarea
+                  className="input min-h-[70px] resize-y text-xs"
+                  value={imagePrompt}
+                  onChange={(e) => setImagePrompt(e.target.value)}
+                  placeholder="Describe exactly what you want the image to look like — this replaces the auto-generated prompt entirely. Leave blank to use the campaign/post-text based prompt instead."
+                />
+                <p className="text-[11px] text-slate-400">
+                  {photoFile
+                    ? "With a photo attached, Generate Image will edit that photo using this prompt."
+                    : "Generate Image will create a new image from this prompt alone."}
+                </p>
+              </div>
+            )}
             {aiOpen && (
               <div className="mt-2 space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                 <div className="grid grid-cols-2 gap-2">
@@ -554,9 +576,55 @@ function ComposerModal({
 
           {(imageUrl || message) && (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/40">
-              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Preview</div>
-              {imageUrl && <img src={imageUrl} alt="" className="mb-2 max-h-56 w-full rounded-lg object-cover" />}
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Preview</span>
+                <button
+                  type="button"
+                  className="text-[11px] font-medium text-brand-600 hover:underline dark:text-brand-400"
+                  onClick={() => setPreviewOpen(true)}
+                >
+                  ⤢ View full post
+                </button>
+              </div>
+              {imageUrl && (
+                <img
+                  src={imageUrl}
+                  alt=""
+                  className="mb-2 max-h-56 w-full cursor-zoom-in rounded-lg object-cover"
+                  onClick={() => setPreviewOpen(true)}
+                />
+              )}
               <p className="whitespace-pre-wrap text-sm text-slate-700 dark:text-slate-200">{message || "…"}</p>
+            </div>
+          )}
+
+          {previewOpen && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/70 p-4" onClick={() => setPreviewOpen(false)}>
+              <div
+                className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-slate-900"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  className="absolute right-3 top-3 z-10 rounded-full bg-black/50 p-1.5 text-white hover:bg-black/70"
+                  onClick={() => setPreviewOpen(false)}
+                  aria-label="Close"
+                >
+                  <IconX className="h-4 w-4" />
+                </button>
+                <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-100 text-sm font-bold text-brand-700 dark:bg-brand-900 dark:text-brand-300">
+                    {(campaigns.find((c: any) => c.id === campaignId)?.name || "?")[0]}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
+                      {campaigns.find((c: any) => c.id === campaignId)?.name || "Your Brand"}
+                    </div>
+                    <div className="text-[11px] text-slate-400">{platform} · {targetKind}</div>
+                  </div>
+                </div>
+                {imageUrl && <img src={imageUrl} alt="" className="max-h-[70vh] w-full object-contain bg-slate-100 dark:bg-slate-800" />}
+                <p className="whitespace-pre-wrap px-4 py-4 text-sm text-slate-700 dark:text-slate-200">{message || "…"}</p>
+              </div>
             </div>
           )}
 

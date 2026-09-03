@@ -77,7 +77,7 @@ def regions_for_shops(shops: list[Shop]) -> dict[str, list[Shop]]:
     return grouped
 
 
-async def generate_post_image(campaign_name: str, message: str) -> str:
+async def generate_post_image(campaign_name: str, message: str, custom_prompt: str | None = None) -> str:
     """The one genuinely-real AI call in this feature: DALL-E generates an
     actual promotional graphic for the post (the "same one-click posting
     automation" from the source doc still applies to the *posting* step —
@@ -85,6 +85,11 @@ async def generate_post_image(campaign_name: str, message: str) -> str:
     a temporary OpenAI-hosted image URL — the same kind Outreach/Email
     Automation already link out to for assignment/tracking, nothing new
     architecturally.
+
+    `custom_prompt`, when given, is sent to the model verbatim instead of
+    the auto-built template below — the client's own free-text prompt box
+    fully overrides the campaign/message-derived one, it does not merge
+    with it.
 
     Deliberately does NOT ask the model to render the campaign's own body
     copy as in-image text — image models are unreliable at legible text
@@ -96,7 +101,7 @@ async def generate_post_image(campaign_name: str, message: str) -> str:
     if not settings.openai_api_key:
         raise HTTPException(status_code=503, detail="Image generation is not configured (missing OPENAI_API_KEY).")
 
-    prompt = (
+    prompt = custom_prompt or (
         f"A vibrant, professional social media promotional graphic recruiting mystery shoppers for the "
         f'"{campaign_name}" campaign. Theme/mood drawn from: "{message}". Bright, eye-catching, modern retail '
         f"marketing style, no readable text or letters in the image, wide banner composition."
@@ -120,20 +125,28 @@ async def generate_post_image(campaign_name: str, message: str) -> str:
 
 
 async def generate_post_image_from_photo(
-    campaign_name: str, message: str, photo_bytes: bytes, photo_filename: str, content_type: str | None
+    campaign_name: str,
+    message: str,
+    photo_bytes: bytes,
+    photo_filename: str,
+    content_type: str | None,
+    custom_prompt: str | None = None,
 ) -> str:
     """Same promotional-graphic generation as generate_post_image, but
     starting from a client-supplied photo (OpenAI's image *edit* endpoint,
     not text-to-image) — the client uploads a real shop/product/shopper
     photo and gets back a on-brand graphic built from it, rather than a
     generic AI illustration. gpt-image-1 (this app's configured image
-    model) only ever returns b64_json for edits, never a hosted url."""
+    model) only ever returns b64_json for edits, never a hosted url.
+
+    `custom_prompt`, when given, fully replaces the auto-built template
+    below (same override semantics as generate_post_image)."""
     import httpx
 
     if not settings.openai_api_key:
         raise HTTPException(status_code=503, detail="Image generation is not configured (missing OPENAI_API_KEY).")
 
-    prompt = (
+    prompt = custom_prompt or (
         f"Turn this photo into a vibrant, professional social media promotional graphic recruiting mystery "
         f'shoppers for the "{campaign_name}" campaign. Theme/mood drawn from: "{message}". Keep the subject of '
         "the original photo recognizable, but make it bright, eye-catching, modern retail marketing style. "
