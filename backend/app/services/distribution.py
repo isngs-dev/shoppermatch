@@ -117,3 +117,42 @@ async def generate_post_image(campaign_name: str, message: str) -> str:
             raise HTTPException(status_code=502, detail="Image generation returned no image")
         url = f"data:image/png;base64,{b64}"
     return url
+
+
+async def generate_post_image_from_photo(
+    campaign_name: str, message: str, photo_bytes: bytes, photo_filename: str, content_type: str | None
+) -> str:
+    """Same promotional-graphic generation as generate_post_image, but
+    starting from a client-supplied photo (OpenAI's image *edit* endpoint,
+    not text-to-image) — the client uploads a real shop/product/shopper
+    photo and gets back a on-brand graphic built from it, rather than a
+    generic AI illustration. gpt-image-1 (this app's configured image
+    model) only ever returns b64_json for edits, never a hosted url."""
+    import httpx
+
+    if not settings.openai_api_key:
+        raise HTTPException(status_code=503, detail="Image generation is not configured (missing OPENAI_API_KEY).")
+
+    prompt = (
+        f"Turn this photo into a vibrant, professional social media promotional graphic recruiting mystery "
+        f'shoppers for the "{campaign_name}" campaign. Theme/mood drawn from: "{message}". Keep the subject of '
+        "the original photo recognizable, but make it bright, eye-catching, modern retail marketing style. "
+        "No readable text or letters in the image."
+    )
+    async with httpx.AsyncClient(timeout=60) as client:
+        res = await client.post(
+            "https://api.openai.com/v1/images/edits",
+            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            data={"model": settings.openai_image_model, "prompt": prompt, "size": "1024x1024", "n": "1"},
+            files={"image": (photo_filename, photo_bytes, content_type or "image/png")},
+        )
+    if res.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Image generation failed: {res.text[:300]}")
+    data = res.json()["data"][0]
+    url = data.get("url")
+    if not url:
+        b64 = data.get("b64_json")
+        if not b64:
+            raise HTTPException(status_code=502, detail="Image generation returned no image")
+        url = f"data:image/png;base64,{b64}"
+    return url

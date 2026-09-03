@@ -261,12 +261,42 @@ function ComposerModal({
   const [aiTone, setAiTone] = useState("professional");
   const [aiLanguage, setAiLanguage] = useState("English");
   const [aiInstructions, setAiInstructions] = useState("");
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [documentText, setDocumentText] = useState("");
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
 
   const shops = useApi(() => (campaignId ? api.campaignShops(campaignId) : Promise.resolve({ items: [] })), [campaignId]);
   const accounts = useApi(() => api.clientSocialAccounts());
 
   const connectedPlatforms = (accounts.data?.items || []).filter((a: any) => a.connected);
   const charCount = message.length;
+
+  async function attachDocument(file: File) {
+    if (!isEdit) {
+      toast("Save as a draft first, then attach a document.", "info");
+      return;
+    }
+    setBusy("document");
+    try {
+      const res = await api.analyzeSocialPostDocument(post.id, file);
+      setDocumentFile(file);
+      setDocumentText(res.text);
+      toast("Document attached — AI generation will use it.", "success");
+    } catch (e: any) {
+      toast(e?.message || "Could not read that document", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function attachPhoto(file: File) {
+    if (!isEdit) {
+      toast("Save as a draft first, then attach a photo.", "info");
+      return;
+    }
+    setPhotoFile(file);
+    toast("Photo attached — Generate Image will use it as a reference.", "success");
+  }
 
   async function generateWithAi() {
     if (!isEdit) {
@@ -275,7 +305,12 @@ function ComposerModal({
     }
     setBusy("ai");
     try {
-      const res = await api.generateSocialPostText(post.id, { tone: aiTone, language: aiLanguage, instructions: aiInstructions || undefined });
+      const res = await api.generateSocialPostText(post.id, {
+        tone: aiTone,
+        language: aiLanguage,
+        instructions: aiInstructions || undefined,
+        document_text: documentText || undefined,
+      });
       setMessage(res.message);
       setAiOpen(false);
       toast("Generated a draft — review before publishing.", "success");
@@ -293,7 +328,9 @@ function ComposerModal({
     }
     setBusy("image");
     try {
-      const res = await api.generateSocialPostImage(post.id);
+      const res = photoFile
+        ? await api.generateSocialPostImageFromPhoto(post.id, photoFile)
+        : await api.generateSocialPostImage(post.id);
       setImageUrl(res.image_url);
       toast("Image generated.", "success");
     } catch (e: any) {
@@ -436,7 +473,66 @@ function ComposerModal({
               <button type="button" className="btn-secondary h-8 px-2.5 text-xs" onClick={generateImage} disabled={busy === "image"}>
                 {busy === "image" ? <Spinner className="h-3.5 w-3.5" /> : null} Generate Image
               </button>
+              <label className="btn-secondary h-8 cursor-pointer px-2.5 text-xs">
+                {busy === "document" ? <Spinner className="h-3.5 w-3.5" /> : null} 📎 Attach Document
+                <input
+                  type="file"
+                  accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) attachDocument(file);
+                  }}
+                />
+              </label>
+              <label className="btn-secondary h-8 cursor-pointer px-2.5 text-xs">
+                🖼️ Attach Photo
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) attachPhoto(file);
+                  }}
+                />
+              </label>
             </div>
+            {(documentFile || photoFile) && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {documentFile && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    📎 {documentFile.name}
+                    <button
+                      type="button"
+                      className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-100"
+                      onClick={() => {
+                        setDocumentFile(null);
+                        setDocumentText("");
+                      }}
+                      aria-label="Remove document"
+                    >
+                      <IconX className="h-3 w-3" />
+                    </button>
+                  </span>
+                )}
+                {photoFile && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    🖼️ {photoFile.name}
+                    <button
+                      type="button"
+                      className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-100"
+                      onClick={() => setPhotoFile(null)}
+                      aria-label="Remove photo"
+                    >
+                      <IconX className="h-3 w-3" />
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
             {aiOpen && (
               <div className="mt-2 space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                 <div className="grid grid-cols-2 gap-2">

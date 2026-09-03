@@ -30,6 +30,7 @@ async def generate_post_text(
     language: str,
     variables: dict[str, str],
     instructions: str | None,
+    document_text: str | None = None,
 ) -> str:
     import httpx
 
@@ -44,6 +45,11 @@ async def generate_post_text(
         "Plain text only, no markdown, no HTML. Keep it appropriate for the platform's typical length.\n\n"
         f"Facts:\n{facts}\n"
     )
+    if document_text:
+        prompt += (
+            f"\nThe client also attached a document — pull any relevant recruiting details from it "
+            f"(without inventing anything beyond what it says):\n{document_text}\n"
+        )
     if instructions:
         prompt += f"\nAdditional instructions from the user: {instructions}\n"
 
@@ -60,3 +66,46 @@ async def generate_post_text(
     if res.status_code >= 400:
         raise HTTPException(status_code=502, detail=f"AI post generation failed: {res.text[:300]}")
     return res.json()["choices"][0]["message"]["content"].strip()
+
+
+# Cap how much of an uploaded document actually reaches the prompt — this is
+# recruiting-post copy, not document summarization, so a few thousand
+# characters of context is plenty and keeps the prompt cheap.
+_DOCUMENT_TEXT_LIMIT = 8000
+
+
+def extract_document_text(filename: str, content: bytes, content_type: str | None) -> str:
+    """Best-effort text extraction for a client-uploaded reference document
+    (.txt/.pdf/.docx) so "Generate with AI" can pull real details from it
+    instead of the client having to retype them into the instructions box."""
+    name = (filename or "").lower()
+    try:
+        if name.endswith(".txt") or (content_type or "").startswith("text/"):
+            text = content.decode("utf-8", errors="ignore")
+        elif name.endswith(".pdf") or content_type == "application/pdf":
+            import io
+
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(content))
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        elif name.endswith(".docx") or content_type == (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ):
+            import io
+
+            from docx import Document
+
+            doc = Document(io.BytesIO(content))
+            text = "\n".join(p.text for p in doc.paragraphs)
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported document type — upload a .txt, .pdf, or .docx file.")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — surfaced to the client as a plain 400, not a 500
+        raise HTTPException(status_code=400, detail=f"Could not read that document: {exc}") from exc
+
+    text = text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="No readable text found in that document.")
+    return text[:_DOCUMENT_TEXT_LIMIT]

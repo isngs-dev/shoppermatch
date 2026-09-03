@@ -15,6 +15,11 @@ cryptography==50.0.0
 reportlab==4.2.5
 openpyxl==3.1.5
 
+# Social Media post composer: extracting text from a client-uploaded
+# reference document (.pdf/.docx) for AI post generation (services/social_ai.py).
+pypdf==5.1.0
+python-docx==1.1.2
+
 # Test / verification tooling
 httpx==0.28.1
 pytest==8.3.4

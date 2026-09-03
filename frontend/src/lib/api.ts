@@ -89,9 +89,11 @@ export async function downloadFile(path: string, filename: string): Promise<void
   URL.revokeObjectURL(url);
 }
 
-// Voice Assistant: multipart audio/transcript upload — auth header only, no
-// Content-Type (the browser sets the multipart boundary itself).
-async function voiceRequest(path: string, form: FormData): Promise<any> {
+// Generic multipart file upload — auth header only, no Content-Type (the
+// browser sets the multipart boundary itself). Shared by anything that
+// posts a File/FormData rather than JSON (voice audio, social post
+// document/photo attachments).
+async function uploadRequest(path: string, form: FormData): Promise<any> {
   const headers: Record<string, string> = {};
   const token = getToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -204,6 +206,16 @@ export const api = {
   generateSocialPostText: (id: string, body: Record<string, any>) =>
     request(`/api/social/posts/${id}/generate`, { method: "POST", body }),
   generateSocialPostImage: (id: string) => request(`/api/social/posts/${id}/generate-image`, { method: "POST" }),
+  analyzeSocialPostDocument: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("document", file);
+    return uploadRequest(`/api/social/posts/${id}/analyze-document`, form);
+  },
+  generateSocialPostImageFromPhoto: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("photo", file);
+    return uploadRequest(`/api/social/posts/${id}/generate-image-from-photo`, form);
+  },
 
   setShopBonus: (campaignId: string, shopId: string, amount: number, note?: string) =>
     request(`/api/campaigns/${campaignId}/shops/${shopId}/bonus`, {
@@ -414,7 +426,7 @@ export const api = {
     if (opts.transcript) form.append("transcript", opts.transcript);
     form.append("context", JSON.stringify(opts.context));
     if (opts.history) form.append("history", JSON.stringify(opts.history));
-    return voiceRequest("/api/voice/command", form);
+    return uploadRequest("/api/voice/command", form);
   },
   voiceSpeak: (text: string) => voiceSpeakRequest(text),
 };

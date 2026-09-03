@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -39,10 +39,15 @@ from ..serializers import iso
 from ..services import facebook_oauth
 from ..services.audit import record_audit
 from ..services.crypto import encrypt_token
-from ..services.distribution import DESTINATION_TYPES, generate_post_image
-from ..services.social_ai import generate_post_text
+from ..services.distribution import DESTINATION_TYPES, generate_post_image, generate_post_image_from_photo
+from ..services.social_ai import extract_document_text, generate_post_text
 from ..services.social_publisher import _claim_for_publishing, attempt_publish
 from ..services.tracking import now
+
+# A generated/uploaded post graphic can be a sizeable base64 data: URI —
+# cap the source photo upload itself well below that so one request can't
+# tie up the OpenAI call with an oversized file.
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 router = APIRouter(prefix="/api/social", tags=["Social Media Automation"])
 
@@ -468,6 +473,7 @@ class GeneratePostRequest(BaseModel):
     tone: str = Field(default="professional", pattern="^(professional|friendly|promotional|short)$")
     language: str = Field(default="English")
     instructions: str | None = Field(default=None, max_length=1000)
+    document_text: str | None = Field(default=None, max_length=8000)
 
 
 @router.post("/posts/{post_id}/generate")
@@ -494,10 +500,30 @@ async def generate_post(
         language=body.language,
         variables=variables,
         instructions=body.instructions,
+        document_text=body.document_text,
     )
     post.message = text
     await session.commit()
     return _post_out(post)
+
+
+@router.post("/posts/{post_id}/analyze-document")
+async def analyze_document_endpoint(
+    post_id: uuid.UUID,
+    document: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    """Extracts text from a client-uploaded reference document (.txt/.pdf/
+    .docx) so the frontend can feed it into /generate's document_text field
+    — kept as a separate step (rather than one multipart /generate call) so
+    the existing JSON-body /generate endpoint doesn't need to change shape."""
+    await _require_post(session, post_id, user)
+    content = await document.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Document must be smaller than 10 MB.")
+    text = extract_document_text(document.filename or "document", content, document.content_type)
+    return {"text": text}
 
 
 @router.post("/posts/{post_id}/generate-image")
@@ -506,6 +532,27 @@ async def generate_post_image_endpoint(
 ):
     post = await _require_post(session, post_id, user)
     image_url = await generate_post_image(post.campaign.name, post.message)
+    post.image_url = image_url
+    await session.commit()
+    return _post_out(post)
+
+
+@router.post("/posts/{post_id}/generate-image-from-photo")
+async def generate_post_image_from_photo_endpoint(
+    post_id: uuid.UUID,
+    photo: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_client),
+):
+    post = await _require_post(session, post_id, user)
+    if not (photo.content_type or "").startswith("image/"):
+        raise HTTPException(status_code=400, detail="Please upload an image file.")
+    content = await photo.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Photo must be smaller than 10 MB.")
+    image_url = await generate_post_image_from_photo(
+        post.campaign.name, post.message, content, photo.filename or "photo.png", photo.content_type
+    )
     post.image_url = image_url
     await session.commit()
     return _post_out(post)
