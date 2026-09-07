@@ -39,7 +39,7 @@ const ENABLED_KEY = "sm_client_voice_enabled";
 const CONFIRM_WORDS = /\b(yes|yeah|yep|confirm|go ahead|do it|send it)\b/i;
 const CANCEL_WORDS = /\b(no|nope|cancel|never ?mind|stop)\b/i;
 const WAKE_WORD = /\bhey\b/i;
-const COMMAND_MS = 4500; // recording window after the wake word fires
+const COMMAND_MS = 6500; // recording window after the wake word/follow-up speech fires — long enough for a full sentence, not just a fragment
 const MAX_HISTORY_TURNS = 12; // sent to the backend each call, bounds token cost
 
 // Shortest possible valid WAV file (a handful of silent samples) — played
@@ -117,6 +117,12 @@ export function ClientVoiceAssistant() {
   // reliable signal for anyway.
   const sessionStartedAtRef = useRef(0);
   const startCommandCaptureRef = useRef<() => void>(() => {});
+  // Once the wake word has fired once, every subsequent turn in this same
+  // enabled session skips requiring "Hey" again — any heard speech while
+  // status is "listening" goes straight to command capture. Reset only when
+  // the assistant is turned off (disableAssistant) and restored on the next
+  // "Hey", so a fresh session always starts wake-word-gated.
+  const conversationModeRef = useRef(false);
 
   useEffect(() => {
     statusRef.current = status;
@@ -606,49 +612,79 @@ export function ClientVoiceAssistant() {
     [performAction]
   );
 
-  const startCommandCapture = useCallback(() => {
-    if (!streamRef.current) return;
+  const startCommandCapture = useCallback(async () => {
     setLiveHeard("");
     try {
       recognitionRef.current?.stop();
     } catch {
       /* already stopped */
     }
-    setStatus("recording");
-    setChatOpen(true);
-    const chunks: BlobPart[] = [];
-    const recorder = new MediaRecorder(streamRef.current);
-    recorderRef.current = recorder;
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
-    };
-    recorder.onstop = async () => {
-      const blob = new Blob(chunks, { type: "audio/webm" });
-      setStatus("thinking");
-      const pending = pendingConfirmRef.current;
+
+    // The wake-word engine (SpeechRecognition) and this recording step
+    // (MediaRecorder) use two separate mic-access paths — a stream acquired
+    // when the assistant was enabled can have its tracks silently end later
+    // (OS reclaimed the mic, input device changed, tab was backgrounded)
+    // while wake-word detection keeps working fine regardless. Previously
+    // this function trusted `streamRef.current` unconditionally: a dead
+    // stream meant either a silent early-return or an uncaught exception
+    // from `new MediaRecorder(...)` — either way, the wake word fired,
+    // nothing visible happened, and the assistant never listened again
+    // (recognition had already been stopped above). Re-validate and
+    // re-acquire here so that failure is recoverable and visible instead.
+    const hasLiveTrack = streamRef.current?.getAudioTracks().some((t) => t.readyState === "live");
+    if (!hasLiveTrack) {
       try {
-        if (pending) {
-          // A yes/no confirmation is handled locally/deterministically —
-          // still needs Whisper to turn the clip into text, but skips the
-          // LLM reasoning call entirely.
-          const res = await api.voiceCommand({ audioBlob: blob, context: {} });
-          await handleUserTurn(res.transcript || "");
-          return;
-        }
-        const res = await api.voiceCommand({ audioBlob: blob, context: await buildContext(), history: messagesRef.current.slice(-MAX_HISTORY_TURNS) });
-        pushMessage("user", res.transcript || "(unclear)");
-        pushMessage("assistant", res.history_text || res.reply_text);
-        await performAction(res.action, res.reply_text);
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch {
-        await respondAndSpeak("Sorry, I couldn't process that.");
+        toast('Lost microphone access — say "Hey" again or re-enable the assistant.', "error");
+        setStatus("listening");
+        restartWakeWordListener();
+        return;
       }
-    };
-    recorder.start();
-    setTimeout(() => {
-      if (recorderRef.current === recorder && recorder.state === "recording") recorder.stop();
-    }, COMMAND_MS);
+    }
+
+    try {
+      setStatus("recording");
+      setChatOpen(true);
+      const chunks: BlobPart[] = [];
+      const recorder = new MediaRecorder(streamRef.current!);
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onstop = async () => {
+        const blob = new Blob(chunks, { type: "audio/webm" });
+        setStatus("thinking");
+        const pending = pendingConfirmRef.current;
+        try {
+          if (pending) {
+            // A yes/no confirmation is handled locally/deterministically —
+            // still needs Whisper to turn the clip into text, but skips the
+            // LLM reasoning call entirely.
+            const res = await api.voiceCommand({ audioBlob: blob, context: {} });
+            await handleUserTurn(res.transcript || "");
+            return;
+          }
+          const res = await api.voiceCommand({ audioBlob: blob, context: await buildContext(), history: messagesRef.current.slice(-MAX_HISTORY_TURNS) });
+          pushMessage("user", res.transcript || "(unclear)");
+          pushMessage("assistant", res.history_text || res.reply_text);
+          await performAction(res.action, res.reply_text);
+        } catch {
+          await respondAndSpeak("Sorry, I couldn't process that.");
+        }
+      };
+      recorder.start();
+      setTimeout(() => {
+        if (recorderRef.current === recorder && recorder.state === "recording") recorder.stop();
+      }, COMMAND_MS);
+    } catch {
+      toast('Couldn\'t start recording — say "Hey" again.', "error");
+      setStatus("listening");
+      restartWakeWordListener();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [performAction, handleUserTurn]);
+  }, [performAction, handleUserTurn, toast]);
 
   function restartWakeWordListener() {
     const rec = recognitionRef.current;
@@ -705,8 +741,16 @@ export function ClientVoiceAssistant() {
         for (let i = event.resultIndex; i < event.results.length; i++) {
           text += event.results[i][0].transcript + " ";
         }
-        setLiveHeard(text.trim());
-        if (WAKE_WORD.test(text)) startCommandCaptureRef.current();
+        text = text.trim();
+        setLiveHeard(text);
+        if (WAKE_WORD.test(text)) {
+          conversationModeRef.current = true;
+          startCommandCaptureRef.current();
+        } else if (conversationModeRef.current && text.length > 0) {
+          // "Hey" was already said once this session — every later turn
+          // goes straight to command capture, no need to repeat it.
+          startCommandCaptureRef.current();
+        }
       };
       rec.onend = () => {
         // Browsers auto-stop continuous recognition after a silence
@@ -773,6 +817,7 @@ export function ClientVoiceAssistant() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     recognitionRef.current = null;
+    conversationModeRef.current = false;
     setStatus("off");
   }
 
@@ -845,7 +890,7 @@ export function ClientVoiceAssistant() {
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Turn on the voice assistant?</div>
               <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                Say "Hey" anytime to navigate, ask about your campaigns, draft emails, or send outreach — hands-free.
+                Say "Hey" once to start — after that you can keep talking turn after turn with no need to repeat it.
                 Needs one-time microphone permission — say "Hey, stop listening" whenever you want it off.
               </p>
               <div className="mt-2.5 flex gap-2">
