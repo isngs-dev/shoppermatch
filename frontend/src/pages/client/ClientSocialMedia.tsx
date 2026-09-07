@@ -530,6 +530,23 @@ function ComposerModal({
             </p>
           )}
 
+          {targetKind === "page" && (
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="label">Date</label>
+                <input type="date" className="input" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Time</label>
+                <input type="time" className="input" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Timezone</label>
+                <input className="input" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+              </div>
+            </div>
+          )}
+
           <div>
             <div className="flex items-center justify-between">
               <label className="label !mb-0">Post text</label>
@@ -713,22 +730,6 @@ function ComposerModal({
             </div>
           )}
 
-          {targetKind === "page" && (
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="label">Date</label>
-                <input type="date" className="input" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Time</label>
-                <input type="time" className="input" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Timezone</label>
-                <input className="input" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
-              </div>
-            </div>
-          )}
         </div>
 
         <div className="mt-5 flex flex-wrap justify-end gap-2">
