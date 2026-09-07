@@ -4,17 +4,20 @@
 # Railway/local docker compose); Postgres connectionString is wired in
 # automatically and normalized to the asyncpg driver by config.py.
 #
-# Free-tier web services spin down after ~15 min idle and cold-start on the
-# next request — background workers (email outbox, automation scheduler)
-# pause while spun down. Fine for a demo; upgrade the plan for anything that
-# needs to keep running/sending in the background continuously.
+# Plan changes here only take effect when you Sync this Blueprint from the
+# Render dashboard — editing this file alone never charges anything. The
+# actual paid upgrade (and its charge) happens when you confirm it in Render's
+# UI. "2c-4g" (web) / "0.1c-256mb" (db) are Render's current plan identifiers
+# for what the dashboard still labels "Pro" (web) and "Basic-256mb" (Postgres)
+# as of this writing — double-check against the live dashboard before syncing,
+# since Render's plan names/specs do change.
 services:
   - type: web
     name: shoppermatch-backend
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: free
+    plan: 2c-4g
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
@@ -41,4 +44,4 @@ services:
 
 databases:
   - name: shoppermatch-db
-    plan: free
+    plan: 0.1c-256mb
