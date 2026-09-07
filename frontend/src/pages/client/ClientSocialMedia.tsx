@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Badge, EmptyState, Loading, Spinner, useToast } from "../../components/ui";
 import { IconX } from "../../components/Icons";
@@ -267,6 +267,47 @@ function ComposerModal({
   const [imagePromptOpen, setImagePromptOpen] = useState(false);
   const [imagePrompt, setImagePrompt] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Separate from `isEdit` (which only controls whether the campaign/shop/
+  // platform pickers are shown — always shown for a brand-new post, per the
+  // "New Social Post" layout below). This tracks whether a real row exists
+  // yet to call the per-post AI endpoints against, so a client can hit
+  // "Generate with AI" / "Generate Image" / etc. straight away on a new post
+  // without an explicit "Save Draft" step first — the draft row is created
+  // silently on first use instead.
+  const [postId, setPostId] = useState<string | null>(post?.id || null);
+  const firstRenderRef = useRef(true);
+  const savedRef = useRef(false);
+  useEffect(() => {
+    // If the client changes campaign/shop/platform after an AI action
+    // already silently created a draft for the *previous* selection, that
+    // row can't be repointed (the update endpoint never changes campaign/
+    // shop/platform) — drop it so the next AI action creates a fresh one
+    // that actually matches what's now selected, rather than silently
+    // generating content for the wrong shop.
+    if (firstRenderRef.current) {
+      firstRenderRef.current = false;
+      return;
+    }
+    if (!isEdit) setPostId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId, sourceType, shopId, platform, targetKind]);
+
+  async function ensurePostId(): Promise<string> {
+    if (postId) return postId;
+    if (!campaignId) throw new Error("Choose a campaign first.");
+    if (sourceType === "shop" && !shopId) throw new Error("Choose a shop first.");
+    const created = await api.createSocialPost({
+      campaign_id: campaignId,
+      source_type: sourceType,
+      source_shop_id: sourceType === "shop" ? shopId : undefined,
+      destination_type: platform,
+      target_kind: targetKind,
+      target_ref: targetRef || undefined,
+      message: message.trim() || "Draft",
+    });
+    setPostId(created.id);
+    return created.id;
+  }
 
   const shops = useApi(() => (campaignId ? api.campaignShops(campaignId) : Promise.resolve({ items: [] })), [campaignId]);
   const accounts = useApi(() => api.clientSocialAccounts());
@@ -275,13 +316,10 @@ function ComposerModal({
   const charCount = message.length;
 
   async function attachDocument(file: File) {
-    if (!isEdit) {
-      toast("Save as a draft first, then attach a document.", "info");
-      return;
-    }
     setBusy("document");
     try {
-      const res = await api.analyzeSocialPostDocument(post.id, file);
+      const id = await ensurePostId();
+      const res = await api.analyzeSocialPostDocument(id, file);
       setDocumentFile(file);
       setDocumentText(res.text);
       toast("Document attached — AI generation will use it.", "success");
@@ -293,22 +331,15 @@ function ComposerModal({
   }
 
   function attachPhoto(file: File) {
-    if (!isEdit) {
-      toast("Save as a draft first, then attach a photo.", "info");
-      return;
-    }
     setPhotoFile(file);
     toast("Photo attached — Generate Image will use it as a reference.", "success");
   }
 
   async function generateWithAi() {
-    if (!isEdit) {
-      toast("Save as a draft first, then generate with AI.", "info");
-      return;
-    }
     setBusy("ai");
     try {
-      const res = await api.generateSocialPostText(post.id, {
+      const id = await ensurePostId();
+      const res = await api.generateSocialPostText(id, {
         tone: aiTone,
         language: aiLanguage,
         instructions: aiInstructions || undefined,
@@ -325,15 +356,12 @@ function ComposerModal({
   }
 
   async function generateImage() {
-    if (!isEdit) {
-      toast("Save as a draft first, then generate an image.", "info");
-      return;
-    }
     setBusy("image");
     try {
+      const id = await ensurePostId();
       const res = photoFile
-        ? await api.generateSocialPostImageFromPhoto(post.id, photoFile, imagePrompt || undefined)
-        : await api.generateSocialPostImage(post.id, imagePrompt || undefined);
+        ? await api.generateSocialPostImageFromPhoto(id, photoFile, imagePrompt || undefined)
+        : await api.generateSocialPostImage(id, imagePrompt || undefined);
       setImageUrl(res.image_url);
       toast("Image generated.", "success");
     } catch (e: any) {
@@ -343,16 +371,44 @@ function ComposerModal({
     }
   }
 
+  async function suggestImagePrompt() {
+    setBusy("suggest-prompt");
+    try {
+      const id = await ensurePostId();
+      const res = await api.suggestSocialPostImagePrompt(id);
+      setImagePrompt(res.prompt);
+      setImagePromptOpen(true);
+      toast("Prompt drafted from this shop's real details — review before generating.", "success");
+    } catch (e: any) {
+      toast(e?.message || "Could not draft a prompt", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function save(kind: "draft" | "schedule" | "publish") {
     setBusy(kind);
     try {
-      let current = post;
-      const body = { campaign_id: campaignId, source_type: sourceType, source_shop_id: sourceType === "shop" ? shopId : undefined, destination_type: platform, target_kind: targetKind, target_ref: targetRef || undefined, message, image_url: imageUrl || undefined };
-      if (!current) {
-        current = await api.createSocialPost(body);
+      // Reuses whatever ensurePostId already created via an AI action, if
+      // any — never creates a second row for the same composer session.
+      let id = postId;
+      if (!id) {
+        const created = await api.createSocialPost({
+          campaign_id: campaignId,
+          source_type: sourceType,
+          source_shop_id: sourceType === "shop" ? shopId : undefined,
+          destination_type: platform,
+          target_kind: targetKind,
+          target_ref: targetRef || undefined,
+          message,
+          image_url: imageUrl || undefined,
+        });
+        id = created.id;
+        setPostId(id);
       } else {
-        current = await api.updateSocialPost(current.id, { message, image_url: imageUrl || undefined, target_ref: targetRef || undefined });
+        await api.updateSocialPost(id, { message, image_url: imageUrl || undefined, target_ref: targetRef || undefined });
       }
+      if (!id) throw new Error("Failed to save post");
       if (kind === "schedule") {
         if (!scheduledDate || !scheduledTime) {
           toast("Choose a date and time to schedule.", "error");
@@ -360,14 +416,15 @@ function ComposerModal({
           return;
         }
         const iso = new Date(`${scheduledDate}T${scheduledTime}`).toISOString();
-        await api.scheduleSocialPost(current.id, iso, timezone);
+        await api.scheduleSocialPost(id, iso, timezone);
         toast("Post scheduled.", "success");
       } else if (kind === "publish") {
-        await api.publishSocialPostNow(current.id);
+        await api.publishSocialPostNow(id);
         toast("Published.", "success");
       } else {
         toast("Draft saved.", "success");
       }
+      savedRef.current = true;
       onSaved();
     } catch (e: any) {
       toast(e?.message || "Failed to save post", "error");
@@ -376,13 +433,28 @@ function ComposerModal({
     }
   }
 
+  // Cleans up a draft an AI action silently created (ensurePostId) if the
+  // client dismisses the composer without ever actually saving it — so
+  // trying "Generate with AI" then changing your mind doesn't leave a junk
+  // placeholder post behind in the list.
+  async function handleClose() {
+    if (postId && !post && !savedRef.current) {
+      try {
+        await api.deleteSocialPost(postId);
+      } catch {
+        /* best effort — worst case an empty draft lingers, harmless */
+      }
+    }
+    onClose();
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/50" onClick={handleClose} />
       <div className="relative my-8 w-full max-w-2xl rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-bold text-slate-900 dark:text-white">{isEdit ? "Edit Post" : "New Social Post"}</h3>
-          <button className="btn-ghost" onClick={onClose} aria-label="Close">
+          <button className="btn-ghost" onClick={handleClose} aria-label="Close">
             <IconX />
           </button>
         </div>
@@ -479,6 +551,15 @@ function ComposerModal({
               <button type="button" className="btn-secondary h-8 px-2.5 text-xs" onClick={() => setImagePromptOpen((v) => !v)}>
                 ✏️ Custom Prompt{imagePrompt ? " ✓" : ""}
               </button>
+              <button
+                type="button"
+                className="btn-secondary h-8 px-2.5 text-xs"
+                onClick={suggestImagePrompt}
+                disabled={busy === "suggest-prompt"}
+                title="Draft an image prompt from this campaign/shop's real details"
+              >
+                {busy === "suggest-prompt" ? <Spinner className="h-3.5 w-3.5" /> : null} 🎯 Suggest Prompt from Shop Data
+              </button>
               <label className="btn-secondary h-8 cursor-pointer px-2.5 text-xs">
                 {busy === "document" ? <Spinner className="h-3.5 w-3.5" /> : null} 📎 Attach Document
                 <input
@@ -546,7 +627,11 @@ function ComposerModal({
                   className="input min-h-[70px] resize-y text-xs"
                   value={imagePrompt}
                   onChange={(e) => setImagePrompt(e.target.value)}
-                  placeholder="Describe exactly what you want the image to look like — this replaces the auto-generated prompt entirely. Leave blank to use the campaign/post-text based prompt instead."
+                  placeholder={
+                    "Describe exactly what you want the image to look like, or click \"Suggest Prompt from Shop Data\" " +
+                    "above to draft one from this campaign/shop's real details. Leave blank to use the default " +
+                    "auto-generated prompt instead."
+                  }
                 />
                 <p className="text-[11px] text-slate-400">
                   {photoFile
@@ -647,7 +732,7 @@ function ComposerModal({
         </div>
 
         <div className="mt-5 flex flex-wrap justify-end gap-2">
-          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn-secondary" onClick={handleClose}>Cancel</button>
           <button className="btn-secondary" onClick={() => save("draft")} disabled={!!busy || !message}>
             {busy === "draft" ? <Spinner /> : null} Save Draft
           </button>

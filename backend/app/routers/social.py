@@ -40,7 +40,7 @@ from ..services import facebook_oauth
 from ..services.audit import record_audit
 from ..services.crypto import encrypt_token
 from ..services.distribution import DESTINATION_TYPES, generate_post_image, generate_post_image_from_photo
-from ..services.social_ai import extract_document_text, generate_post_text
+from ..services.social_ai import extract_document_text, generate_image_prompt, generate_post_text
 from ..services.social_publisher import _claim_for_publishing, attempt_publish
 from ..services.tracking import now
 
@@ -531,6 +531,27 @@ class GenerateImageRequest(BaseModel):
     # replaces the auto-built campaign/message prompt rather than merging
     # with it (see services/distribution.py::generate_post_image).
     prompt: str | None = Field(default=None, max_length=1000)
+
+
+@router.post("/posts/{post_id}/suggest-image-prompt")
+async def suggest_image_prompt_endpoint(
+    post_id: uuid.UUID, session: AsyncSession = Depends(get_session), user: User = Depends(require_client)
+):
+    """Drafts an image-generation prompt from the post's real shop/campaign
+    data (same facts text generation uses) for the client to review/edit in
+    the Custom Prompt box — never touches image_url itself, generating the
+    actual image is still a separate, explicit step."""
+    post = await _require_post(session, post_id, user)
+
+    from ..services.social_templates import variables_from_campaign, variables_from_shop
+
+    if post.source_shop:
+        variables = variables_from_shop(post.source_shop, post.campaign, settings.public_base_url)
+    else:
+        variables = variables_from_campaign(post.campaign, settings.public_base_url)
+
+    prompt = await generate_image_prompt(variables=variables)
+    return {"prompt": prompt}
 
 
 @router.post("/posts/{post_id}/generate-image")

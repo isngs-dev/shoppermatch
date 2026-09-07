@@ -68,6 +68,48 @@ async def generate_post_text(
     return res.json()["choices"][0]["message"]["content"].strip()
 
 
+async def generate_image_prompt(*, variables: dict[str, str]) -> str:
+    """Drafts a ready-to-use DALL-E prompt from the same real campaign/shop
+    facts (title, category, location, compensation, dates — see
+    services/social_templates.py's variables_from_*) that already drive text
+    generation, rather than the client having to write an image prompt from
+    scratch. Returned as plain text for the client to review/edit in the
+    Custom Prompt box before generating — this never calls the image
+    generation endpoint itself."""
+    import httpx
+
+    if not settings.openai_api_key:
+        raise HTTPException(status_code=503, detail="AI prompt generation is not configured (missing OPENAI_API_KEY).")
+
+    facts = "\n".join(f"- {k}: {v}" for k, v in variables.items() if v)
+    prompt = (
+        "Write ONE image-generation prompt (for DALL-E / an AI image model) for a social media promotional "
+        "graphic recruiting mystery shoppers, based ONLY on the real details below — never invent details, "
+        "prices, or locations beyond what's given.\n\n"
+        f"Details:\n{facts}\n\n"
+        "Requirements for the prompt you write:\n"
+        "- Describe a vibrant, professional, eye-catching illustration style scene reflecting these details "
+        "(e.g. work the location/category into the visual mood, not as literal signage).\n"
+        "- Explicitly say the image must have NO readable text or letters in it (image models render text "
+        "unreliably) — the caption is added separately as a real text layer.\n"
+        "- Wide banner composition.\n"
+        "- Output ONLY the prompt itself, one paragraph, no preamble, no quotes, no markdown."
+    )
+    async with httpx.AsyncClient(timeout=30) as client:
+        res = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            json={
+                "model": settings.openai_chat_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.8,
+            },
+        )
+    if res.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"AI prompt generation failed: {res.text[:300]}")
+    return res.json()["choices"][0]["message"]["content"].strip()
+
+
 # Cap how much of an uploaded document actually reaches the prompt — this is
 # recruiting-post copy, not document summarization, so a few thousand
 # characters of context is plenty and keeps the prompt cheap.
