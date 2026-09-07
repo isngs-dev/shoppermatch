@@ -5,7 +5,7 @@ import { InvitationDrawer } from "../components/InvitationDrawer";
 import { IconCursor, IconMail, IconSend, IconTarget, IconX } from "../components/Icons";
 import { Badge, CopyButton, KpiCard, Loading, Spinner, useToast } from "../components/ui";
 import { api } from "../lib/api";
-import { classNames, fmtDateTime, statusBadgeClass } from "../lib/format";
+import { classNames, fmtDateTime, fmtMoney, statusBadgeClass } from "../lib/format";
 import { useApi } from "../lib/useApi";
 
 // --------------------------- Built-in templates --------------------------- //
@@ -608,6 +608,15 @@ export function Outreach() {
     );
   }, [isMultiShop, combinedRecs.data, selectedShopIds, recs.data, shoppers.data, pendingByShopperId, pendingInvitationsApi.data]);
 
+  // Shop-level bonus lookup (see AI Recommendations' Add Bonus / AI-suggested
+  // bonus) — surfaced here too so the client still sees which shoppers are
+  // being offered a bonus right up until the invitation actually goes out.
+  const bonusByShopId = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const s of shops as any[]) if (s.bonus) map.set(s.id, s.bonus);
+    return map;
+  }, [shops]);
+
   // Maps a selected shopper back to which shop they were recommended for —
   // only meaningful/populated in combined mode, used by sendBulk to route
   // each shopper's invitation to the right shop.
@@ -1083,7 +1092,9 @@ export function Outreach() {
                       </button>
                     </div>
                     <div className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
-                      {shopperOptions.map((s) => (
+                      {shopperOptions.map((s) => {
+                        const bonus = bonusByShopId.get(s.shopId || shopId);
+                        return (
                         <label
                           key={s.id}
                           className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800/50"
@@ -1096,6 +1107,14 @@ export function Outreach() {
                               ? `${s.name} — ${s.city} (${s.availability_status})`
                               : s.name}
                           </span>
+                          {bonus && (
+                            <span
+                              className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+                              title="This shop has a client-funded bonus set — mention it in the outreach email"
+                            >
+                              💰 {fmtMoney(bonus.amount, bonus.currency)} bonus
+                            </span>
+                          )}
                           {s.pendingInvitationId ? (
                             <span
                               className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"
@@ -1109,7 +1128,8 @@ export function Outreach() {
                             )
                           )}
                         </label>
-                      ))}
+                        );
+                      })}
                     </div>
                   </>
                 )}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Funnel } from "../components/Funnel";
 import { InvitationDrawer } from "../components/InvitationDrawer";
@@ -623,7 +623,7 @@ function RecommendationsTab({
         </div>
       )}
 
-      <AutoAssignCard campaignId={campaignId} />
+      <AutoAssignCard campaignId={campaignId} shops={shops.data?.items || []} />
 
       {running && (
         <div className="flex items-center gap-1.5 text-xs text-slate-400">
@@ -953,8 +953,13 @@ function BonusModal({
   );
 }
 
-function AutoAssignCard({ campaignId }: { campaignId: string }) {
+function AutoAssignCard({ campaignId, shops }: { campaignId: string; shops: any[] }) {
   const toast = useToast();
+  const bonusByShopId = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const s of shops) if (s.bonus) map.set(s.id, s.bonus);
+    return map;
+  }, [shops]);
   // Kept as raw text while typing (not a number) so backspacing to clear
   // the field doesn't immediately snap back to a forced value — only
   // clamped to a real number where it's actually used, below.
@@ -1095,9 +1100,20 @@ function AutoAssignCard({ campaignId }: { campaignId: string }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
-                {proposal.proposals.map((p: any, i: number) => (
+                {proposal.proposals.map((p: any, i: number) => {
+                  const bonus = bonusByShopId.get(p.shop_id);
+                  return (
                   <tr key={i}>
-                    <td className="td">{p.shop_name}</td>
+                    <td className="td">
+                      {p.shop_name}
+                      {bonus && (
+                        <span title="A client-funded bonus is set for this shop">
+                          <Badge className="ml-1.5 bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">
+                            💰 {fmtMoney(bonus.amount, bonus.currency)} bonus
+                          </Badge>
+                        </span>
+                      )}
+                    </td>
                     <td className="td font-medium text-slate-800 dark:text-slate-100">
                       {p.shopper_name}
                       {p.reasons?.length > 0 && (
@@ -1107,7 +1123,8 @@ function AutoAssignCard({ campaignId }: { campaignId: string }) {
                     <td className="td text-right">{p.match_score}%</td>
                     <td className="td text-right">{p.distance_km != null ? `${p.distance_km} km` : "—"}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
