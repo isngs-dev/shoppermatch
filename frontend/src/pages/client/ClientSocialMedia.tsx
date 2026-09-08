@@ -722,35 +722,41 @@ function ComposerModal({
           {previewOpen && (
             <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-black/70 p-4" onClick={() => setPreviewOpen(false)}>
               <div
-                className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-slate-900"
+                className="relative my-8 flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-slate-900"
                 onClick={(e) => e.stopPropagation()}
               >
-                <button
-                  className="absolute right-3 top-3 z-10 rounded-full bg-black/50 p-1.5 text-white hover:bg-black/70"
-                  onClick={() => setPreviewOpen(false)}
-                  aria-label="Close"
-                >
-                  <IconX className="h-4 w-4" />
-                </button>
-                <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+                {/* Sticky so it stays reachable while scrolling a long post
+                    below — a fixed max-height card must never rely on an
+                    absolutely-positioned close button that scrolls away
+                    with the content. */}
+                <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-100 text-sm font-bold text-brand-700 dark:bg-brand-900 dark:text-brand-300">
                     {(campaigns.find((c: any) => c.id === campaignId)?.name || "?")[0]}
                   </div>
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
                       {campaigns.find((c: any) => c.id === campaignId)?.name || "Your Brand"}
                     </div>
                     <div className="text-[11px] text-slate-400">{platform} · {targetKind}</div>
                   </div>
+                  <button
+                    className="shrink-0 rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                    onClick={() => setPreviewOpen(false)}
+                    aria-label="Close"
+                  >
+                    <IconX className="h-4 w-4" />
+                  </button>
                 </div>
-                {imageUrl && <img src={imageUrl} alt="" className="max-h-[70vh] w-full object-contain bg-slate-100 dark:bg-slate-800" />}
-                <p className="whitespace-pre-wrap px-4 py-4 text-sm text-slate-700 dark:text-slate-200">{message ? renderCaption(message) : "…"}</p>
-                {hasMarkdownBold(message) && (
-                  <p className="px-4 pb-4 text-[11px] text-amber-600 dark:text-amber-400">
-                    ⚠ Facebook/Instagram don't render bold formatting — this will post as plain text with literal
-                    asterisks.
-                  </p>
-                )}
+                <div className="overflow-y-auto">
+                  {imageUrl && <img src={imageUrl} alt="" className="max-h-[50vh] w-full object-contain bg-slate-100 dark:bg-slate-800" />}
+                  <p className="whitespace-pre-wrap px-4 py-4 text-sm text-slate-700 dark:text-slate-200">{message ? renderCaption(message) : "…"}</p>
+                  {hasMarkdownBold(message) && (
+                    <p className="px-4 pb-4 text-[11px] text-amber-600 dark:text-amber-400">
+                      ⚠ Facebook/Instagram don't render bold formatting — this will post as plain text with literal
+                      asterisks.
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
           )}
