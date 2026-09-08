@@ -43,6 +43,19 @@ const STATUS_LABELS: Record<string, string> = {
   manual_required: "Manual Posting Required",
 };
 
+// Facebook/Instagram captions never render markdown — a literal "**word**"
+// posts as literal asterisks. AI-generated or pasted text sometimes still
+// carries `**bold**` markers (e.g. a copy-pasted creative brief), so every
+// place a caption is shown renders it through this instead of the raw
+// string, to actually preview what the live post will look like.
+function hasMarkdownBold(text: string): boolean {
+  return /\*\*(.+?)\*\*/.test(text || "");
+}
+function renderCaption(text: string) {
+  const parts = (text || "").split(/\*\*(.+?)\*\*/g);
+  return parts.map((part, i) => (i % 2 === 1 ? <strong key={i}>{part}</strong> : part));
+}
+
 export function ClientSocialMedia() {
   const [params, setParams] = useSearchParams();
   const tab = (params.get("tab") as TabKey) || "posts";
@@ -140,7 +153,7 @@ function PostsTab() {
                   <span className="text-xs text-slate-400">{p.campaign_name}</span>
                   {p.source_shop_name && <span className="text-xs text-slate-400">· {p.source_shop_name}</span>}
                 </div>
-                <p className="mt-2 line-clamp-2 text-sm text-slate-700 dark:text-slate-200">{p.message}</p>
+                <p className="mt-2 line-clamp-2 text-sm text-slate-700 dark:text-slate-200">{renderCaption(p.message)}</p>
                 <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-slate-400">
                   {p.target_ref && <span>Target: {p.target_ref}</span>}
                   {p.scheduled_at && <span>Scheduled: {fmtDateTime(p.scheduled_at)} ({p.timezone})</span>}
@@ -696,7 +709,13 @@ function ComposerModal({
                   onClick={() => setPreviewOpen(true)}
                 />
               )}
-              <p className="whitespace-pre-wrap text-sm text-slate-700 dark:text-slate-200">{message || "…"}</p>
+              <p className="whitespace-pre-wrap text-sm text-slate-700 dark:text-slate-200">{message ? renderCaption(message) : "…"}</p>
+              {hasMarkdownBold(message) && (
+                <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+                  ⚠ Facebook/Instagram don't render bold formatting — the ** you see bolded here will post as plain
+                  text with literal asterisks. Edit the post text above to remove them if you don't want that.
+                </p>
+              )}
             </div>
           )}
 
@@ -725,7 +744,13 @@ function ComposerModal({
                   </div>
                 </div>
                 {imageUrl && <img src={imageUrl} alt="" className="max-h-[70vh] w-full object-contain bg-slate-100 dark:bg-slate-800" />}
-                <p className="whitespace-pre-wrap px-4 py-4 text-sm text-slate-700 dark:text-slate-200">{message || "…"}</p>
+                <p className="whitespace-pre-wrap px-4 py-4 text-sm text-slate-700 dark:text-slate-200">{message ? renderCaption(message) : "…"}</p>
+                {hasMarkdownBold(message) && (
+                  <p className="px-4 pb-4 text-[11px] text-amber-600 dark:text-amber-400">
+                    ⚠ Facebook/Instagram don't render bold formatting — this will post as plain text with literal
+                    asterisks.
+                  </p>
+                )}
               </div>
             </div>
           )}
