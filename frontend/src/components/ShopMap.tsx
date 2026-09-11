@@ -69,7 +69,7 @@ function shopperIcon(rank: number) {
   });
 }
 
-const INDIA_CENTER: [number, number] = [20.5937, 78.9629];
+const US_CENTER: [number, number] = [39.8283, -98.5795];
 
 export function CampaignMapTab({
   campaignId,
@@ -144,8 +144,8 @@ export function CampaignMapTab({
         ) : (
           <MapContainer
             ref={mapRef}
-            {...(bounds.length ? { bounds } : { center: INDIA_CENTER, zoom: 5 })}
-            boundsOptions={{ padding: [40, 40] }}
+            {...(bounds.length ? { bounds } : { center: US_CENTER, zoom: 4 })}
+            boundsOptions={{ padding: [60, 60], maxZoom: 14 }}
             style={{ height: "100%", width: "100%" }}
             scrollWheelZoom
           >

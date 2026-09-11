@@ -39,7 +39,7 @@ TOOLS: list[dict[str, Any]] = [
             "name": "navigate",
             "description": (
                 "Go to a different page in the client portal. Use page='campaign_detail' to open ONE "
-                "specific campaign's page directly (e.g. 'open the outreach tab for Nike Mumbai Store "
+                "specific campaign's page directly (e.g. 'open the outreach tab for Nike New York Metro Store "
                 "Audit') — set campaign_name and detail_tab. Use page='social-media' for the client's "
                 "Social Media Automation hub (posts/templates/connected accounts across ALL campaigns) — "
                 "not a per-campaign tab."
@@ -141,7 +141,7 @@ TOOLS: list[dict[str, Any]] = [
             "description": (
                 "Write or revise the social/portal post creative (caption text) for a named "
                 "campaign's Region-Targeted Social Media Posting (viewable on the Social Media page) — "
-                "e.g. 'write a post for Nike Mumbai Store Audit', 'make that post punchier'. If revising "
+                "e.g. 'write a post for Nike New York Metro Store Audit', 'make that post punchier'. If revising "
                 "a draft from earlier in this conversation, return the full updated text. This is "
                 "text only — no image is generated at this step (that happens right before "
                 "posting, via post_distribution, so nothing is generated for a draft that gets "
@@ -307,7 +307,7 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "export_campaign_report",
             "description": (
-                "Downloads a campaign report for the client — e.g. 'export the Nike Mumbai report as "
+                "Downloads a campaign report for the client — e.g. 'export the Nike New York report as "
                 "PDF', 'download a CSV of that campaign's report'. Non-destructive read-only download, "
                 "so call it directly without confirmation."
             ),

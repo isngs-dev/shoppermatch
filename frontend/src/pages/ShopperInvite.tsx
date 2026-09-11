@@ -60,7 +60,7 @@ export function ShopperInvite() {
 
   const responded = data.response || localResponse;
   const comp = data.shop.compensation;
-  const symbol = data.shop.currency === "INR" ? "₹" : "";
+  const symbol = data.shop.currency === "USD" ? "$" : data.shop.currency === "INR" ? "₹" : "";
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900">

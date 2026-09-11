@@ -12,9 +12,18 @@ from __future__ import annotations
 import re
 
 KNOWN_CITIES = [
-    "Mumbai", "Pune", "Nashik", "Thane", "Navi Mumbai", "Bangalore", "Delhi",
-    "Gurgaon", "Hyderabad", "Chennai", "Ahmedabad", "Kolkata", "Jaipur",
-    "Indore", "Nagpur",
+    "Manhattan", "Brooklyn", "Queens", "The Bronx", "Staten Island", "Jersey City",
+    "Hoboken", "Newark", "Yonkers", "White Plains", "New Rochelle", "Stamford",
+    "Hartford", "New Haven", "Trenton", "Elizabeth", "Paramus", "Edison",
+    "Long Island City", "Flushing", "The Loop", "Lincoln Park", "Wicker Park",
+    "Naperville", "Evanston", "Oak Park", "Schaumburg", "Skokie", "Cicero",
+    "Aurora", "Elgin", "Joliet", "Waukegan", "Berwyn", "Orland Park",
+    "Tinley Park", "Downers Grove", "Arlington Heights", "Palatine", "Bolingbrook",
+    "Downtown LA", "Hollywood", "Santa Monica", "Pasadena", "Long Beach",
+    "Burbank", "Glendale", "Anaheim", "Irvine", "Santa Ana", "Pomona",
+    "Torrance", "Inglewood", "Compton", "Van Nuys", "Beverly Hills",
+    "West Hollywood", "Culver City", "Manhattan Beach", "Costa Mesa",
+    "New York", "Chicago", "Los Angeles",
 ]
 KNOWN_CATEGORIES = [
     "Retail", "Fashion", "Electronics", "Grocery", "Food & Beverage", "Banking",

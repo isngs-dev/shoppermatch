@@ -42,7 +42,7 @@ const CURRENCY_SYMBOL: Record<string, string> = {
   GBP: "£",
 };
 
-export function fmtMoney(amount?: number | null, currency = "INR"): string {
+export function fmtMoney(amount?: number | null, currency = "USD"): string {
   if (amount === null || amount === undefined) return "—";
   const symbol = CURRENCY_SYMBOL[currency] || "";
   return `${symbol}${amount.toLocaleString()}`;

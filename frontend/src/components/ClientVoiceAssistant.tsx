@@ -242,7 +242,7 @@ export function ClientVoiceAssistant() {
     ]);
     const all = [...(activeRes.items || []), ...(upcomingRes.items || [])];
     const needle = campaignName.toLowerCase();
-    // Exact match must win over substring — e.g. "Nike Mumbai Store Audit"
+    // Exact match must win over substring — e.g. "Nike New York Metro Store Audit"
     // vs. a shorter campaign name that happens to be contained in it.
     return (
       all.find((c: any) => c.name.toLowerCase() === needle) ||

@@ -191,7 +191,7 @@ class Shop(Base):
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     required_shoppers: Mapped[int] = mapped_column(Integer, default=1)
     compensation: Mapped[int] = mapped_column(Integer, default=0)  # whole currency units
-    currency: Mapped[str] = mapped_column(String(8), default="INR")
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
     category: Mapped[str | None] = mapped_column(String(120), nullable=True)
     visit_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     visit_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -891,7 +891,7 @@ class ShopBonus(Base):
     )
     campaign_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
     amount: Mapped[int] = mapped_column(Integer)
-    currency: Mapped[str] = mapped_column(String(8), default="INR")
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

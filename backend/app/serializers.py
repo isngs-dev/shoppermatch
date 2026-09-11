@@ -300,7 +300,7 @@ def public_invitation(inv: Invitation) -> dict:
             "state": shop.state if shop else None,
             "address": shop.address if shop else None,
             "compensation": shop.compensation if shop else None,
-            "currency": shop.currency if shop else "INR",
+            "currency": shop.currency if shop else "USD",
             "visit_start": iso(shop.visit_start) if shop else None,
             "visit_end": iso(shop.visit_end) if shop else None,
             "category": shop.category if shop else None,

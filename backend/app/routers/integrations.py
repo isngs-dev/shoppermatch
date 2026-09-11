@@ -232,7 +232,7 @@ async def test_integration(
                 async with httpx.AsyncClient(timeout=10) as client:
                     resp = await client.get(
                         "https://maps.googleapis.com/maps/api/geocode/json",
-                        params={"address": "Mumbai, India", "key": key},
+                        params={"address": "New York, NY", "key": key},
                     )
                 body = resp.json() if resp.status_code == 200 else {}
                 ok = body.get("status") == "OK"

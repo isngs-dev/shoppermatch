@@ -43,7 +43,7 @@ def variables_for(source_type: str) -> list[tuple[str, str]]:
     return CAMPAIGN_VARIABLES if source_type == "campaign" else SHOP_VARIABLES
 
 
-def _fmt_money(amount: int | None, currency: str = "INR") -> str:
+def _fmt_money(amount: int | None, currency: str = "USD") -> str:
     if amount is None:
         return "—"
     return f"{currency} {amount}"

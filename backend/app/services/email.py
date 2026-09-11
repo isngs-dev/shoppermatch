@@ -100,7 +100,7 @@ def build_variable_context(inv: Invitation, preview: bool = False) -> dict[str, 
     shop = inv.shop
     campaign = inv.campaign
     first_name = shopper.name.split(" ")[0] if shopper else "there"
-    comp = _fmt_money(shop.compensation if shop else None, shop.currency if shop else "INR")
+    comp = _fmt_money(shop.compensation if shop else None, shop.currency if shop else "USD")
     location = ", ".join([p for p in [shop.city if shop else None, shop.state if shop else None] if p])
     return {
         "shopper_name": first_name,
@@ -180,7 +180,7 @@ def render_email(inv: Invitation, preview: bool = False) -> dict[str, Any]:
     campaign = inv.campaign
 
     first_name = shopper.name.split(" ")[0] if shopper else "there"
-    comp = _fmt_money(shop.compensation if shop else None, shop.currency if shop else "INR")
+    comp = _fmt_money(shop.compensation if shop else None, shop.currency if shop else "USD")
     window = _fmt_window(shop.visit_start if shop else None, shop.visit_end if shop else None)
     location = ", ".join([p for p in [shop.city if shop else None, shop.state if shop else None] if p])
     click = build_click_url(inv)

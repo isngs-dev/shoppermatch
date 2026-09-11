@@ -28,10 +28,10 @@ async def _get_nike(session) -> tuple[Client, Campaign, list[Shop]]:
     if client is None:
         raise RuntimeError("Nike client not found — run app.seed first")
     campaign = (
-        await session.execute(select(Campaign).where(Campaign.name == "Nike Mumbai Store Audit"))
+        await session.execute(select(Campaign).where(Campaign.name == "Nike New York Metro Store Audit"))
     ).scalar_one_or_none()
     if campaign is None:
-        raise RuntimeError("Nike Mumbai Store Audit campaign not found — run app.seed first")
+        raise RuntimeError("Nike New York Metro Store Audit campaign not found — run app.seed first")
     shops = (await session.execute(select(Shop).where(Shop.campaign_id == campaign.id))).scalars().all()
     return client, campaign, shops
 
@@ -46,8 +46,8 @@ async def _build_accounts(session, client: Client) -> list[str]:
     }
     created = []
     for platform, account_name in [
-        ("facebook", "Nike India Retail Careers"),
-        ("instagram", "@nike.india.careers"),
+        ("facebook", "Nike US Retail Careers"),
+        ("instagram", "@nike.us.careers"),
     ]:
         if platform in existing:
             continue
@@ -82,14 +82,14 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
             campaign=campaign,
             source_type="shop",
             source_shop=shop,
-            region=shop.city if shop else "Mumbai",
+            region=shop.city if shop else "Manhattan",
             destination_type="facebook",
-            destination_name="Nike India Retail Careers",
+            destination_name="Nike US Retail Careers",
             target_kind="page",
             target_ref="demo-facebook-page-id",
             message=(
-                f"We're hiring mystery shoppers for {shop.shop_name if shop else 'our Mumbai store'}! "
-                f"Earn INR {int(shop.compensation) if shop and shop.compensation else 1500} for a quick visit. "
+                f"We're hiring mystery shoppers for {shop.shop_name if shop else 'our Manhattan store'}! "
+                f"Earn ${int(shop.compensation) if shop and shop.compensation else 30} for a quick visit. "
                 "Apply now — spots are limited."
             ),
             status="posted",
@@ -101,12 +101,12 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
         DistributionPost(
             campaign=campaign,
             source_type="campaign",
-            region="Mumbai",
+            region="New York",
             destination_type="instagram",
-            destination_name="@nike.india.careers",
+            destination_name="@nike.us.careers",
             target_kind="page",
             target_ref="demo-instagram-page-id",
-            message="Nike Mumbai Store Audit is live! Get paid to shop and share your experience. Sign up in bio.",
+            message="Nike New York Metro Store Audit is live! Get paid to shop and share your experience. Sign up in bio.",
             status="posted",
             posted_by="Nike Brand Team",
             posted_at=now - timedelta(days=2),
@@ -117,30 +117,30 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
             campaign=campaign,
             source_type="shop",
             source_shop=shop2,
-            region=shop2.city if shop2 else "Pune",
+            region=shop2.city if shop2 else "Brooklyn",
             destination_type="facebook",
-            destination_name="Nike India Retail Careers",
+            destination_name="Nike US Retail Careers",
             target_kind="page",
             target_ref="demo-facebook-page-id",
             message=(
-                f"Last call for shoppers at {shop2.shop_name if shop2 else 'our Pune store'} — "
+                f"Last call for shoppers at {shop2.shop_name if shop2 else 'our Brooklyn store'} — "
                 "quick visit, real pay, flexible timing. Apply today!"
             ),
             status="scheduled",
             posted_by="Nike Brand Team",
             scheduled_at=now + timedelta(days=1, hours=3),
-            timezone="Asia/Kolkata",
+            timezone="America/New_York",
         ),
         # Draft, awaiting review before scheduling/publishing.
         DistributionPost(
             campaign=campaign,
             source_type="campaign",
-            region="Nashik",
+            region="Staten Island",
             destination_type="instagram",
-            destination_name="@nike.india.careers",
+            destination_name="@nike.us.careers",
             target_kind="page",
             target_ref="demo-instagram-page-id",
-            message="New opportunity in Nashik! Join our mystery shopper program for Nike Mumbai Store Audit.",
+            message="New opportunity on Staten Island! Join our mystery shopper program for Nike New York Metro Store Audit.",
             status="pending_approval",
             posted_by="Nike Brand Team",
         ),
@@ -148,12 +148,12 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
         DistributionPost(
             campaign=campaign,
             source_type="campaign",
-            region="Mumbai",
+            region="New York",
             destination_type="facebook",
-            destination_name="Mumbai Gig Workers Community",
+            destination_name="New York Gig Workers Community",
             target_kind="group",
-            target_ref="https://facebook.com/groups/mumbai-gig-workers-demo",
-            message="Looking for mystery shoppers in Mumbai — flexible hours, quick payout. DM for details.",
+            target_ref="https://facebook.com/groups/nyc-gig-workers-demo",
+            message="Looking for mystery shoppers in New York — flexible hours, quick payout. DM for details.",
             status="manual_required",
             posted_by="Nike Brand Team",
         ),
