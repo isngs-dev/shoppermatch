@@ -198,6 +198,23 @@ export const IconHistory = (p: P) => (
     <path d="M3.5 9L2 7.5M3.5 9L5 7.5M3.5 9V5.5" />
   </svg>
 );
+export const IconSearch = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M21 21l-4.3-4.3" />
+  </svg>
+);
+export const IconCommand = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M9 3a2 2 0 1 0 2 2v14a2 2 0 1 0-2-2H5a2 2 0 1 0 0 4h14a2 2 0 1 0 0-4h-4" />
+    <rect x="6" y="6" width="12" height="12" rx="2" />
+  </svg>
+);
+export const IconZap = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M13 2L4 14h6l-1 8 9-12h-6z" />
+  </svg>
+);
 export const IconMic = (p: P) => (
   <svg {...base(p)}>
     <rect x="9" y="2" width="6" height="12" rx="3" />

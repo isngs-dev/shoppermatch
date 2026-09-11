@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { IconArrowRight, IconCampaign, IconTarget, IconUsers } from "../../components/Icons";
+import { IconArrowRight, IconCampaign, IconSend, IconTarget, IconUsers } from "../../components/Icons";
 import { Badge, KpiCard, Loading, ProgressBar } from "../../components/ui";
 import { api } from "../../lib/api";
 import { classNames, fmtDate } from "../../lib/format";
@@ -34,6 +34,7 @@ const BUCKET_BADGE: Record<string, string> = {
 };
 
 export function ClientDashboard() {
+  const navigate = useNavigate();
   const { data, loading, error, reload } = useApi(() => api.clientDashboard());
   if (loading && !data) return <Loading label="Loading your dashboard…" />;
   if (error) return <ErrorBox message={error} onRetry={reload} />;
@@ -61,7 +62,8 @@ export function ClientDashboard() {
   return (
     <div className="space-y-6">
       {/* Hero */}
-      <div className="card overflow-hidden bg-gradient-to-br from-brand-600 via-indigo-600 to-violet-700 p-6 text-white">
+      <div className="relative overflow-hidden rounded-2xl p-6 text-white shadow-glow-lg">
+        <div className="absolute inset-0 -z-10 animate-gradient-x bg-brand-gradient bg-gradient-size" />
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-sm font-medium text-white/80">{greeting()}</p>
@@ -87,16 +89,16 @@ export function ClientDashboard() {
 
       {/* KPI row — clickable */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Link to="/client/campaigns/active" className="transition hover:-translate-y-0.5">
+        <Link to="/client/campaigns/active" className="block rounded-2xl transition-all duration-200 hover:-translate-y-1 hover:shadow-glow">
           <KpiCard label="Active Campaigns" value={data.active_campaigns} icon={<IconCampaign width={18} />} accent="brand" />
         </Link>
-        <Link to="/client/campaigns/upcoming" className="transition hover:-translate-y-0.5">
+        <Link to="/client/campaigns/upcoming" className="block rounded-2xl transition-all duration-200 hover:-translate-y-1 hover:shadow-glow">
           <KpiCard label="Upcoming Campaigns" value={data.upcoming_campaigns} icon={<IconCampaign width={18} />} accent="sky" />
         </Link>
-        <Link to="/client/campaigns/completed" className="transition hover:-translate-y-0.5">
+        <Link to="/client/campaigns/completed" className="block rounded-2xl transition-all duration-200 hover:-translate-y-1 hover:shadow-glow">
           <KpiCard label="Completed Campaigns" value={data.completed_campaigns} icon={<IconTarget width={18} />} accent="emerald" />
         </Link>
-        <Link to="/client/campaigns" className="transition hover:-translate-y-0.5">
+        <Link to="/client/campaigns" className="block rounded-2xl transition-all duration-200 hover:-translate-y-1 hover:shadow-glow">
           <KpiCard
             label="Shops"
             value={`${data.completed_shops}/${data.total_shops}`}
@@ -209,10 +211,13 @@ export function ClientDashboard() {
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {campaigns.map((c: any) => (
-              <Link
+              <div
                 key={c.id}
-                to={`/client/campaigns/${c.id}`}
-                className="group rounded-xl border border-slate-100 p-4 transition hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-md dark:border-slate-800 dark:hover:border-brand-700"
+                role="link"
+                tabIndex={0}
+                onClick={() => navigate(`/client/campaigns/${c.id}`)}
+                onKeyDown={(e) => e.key === "Enter" && navigate(`/client/campaigns/${c.id}`)}
+                className="group relative cursor-pointer overflow-hidden rounded-xl border border-slate-100 p-4 transition-all duration-200 hover:-translate-y-1 hover:border-brand-300 hover:shadow-glow dark:border-slate-800 dark:hover:border-brand-700"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 font-semibold text-slate-900 group-hover:text-brand-600 dark:text-white dark:group-hover:text-brand-400">
@@ -232,7 +237,22 @@ export function ClientDashboard() {
                 {c.deadline && (
                   <div className="mt-2 text-[11px] text-slate-400">Deadline {fmtDate(c.deadline)}</div>
                 )}
-              </Link>
+                {/* Quick action revealed on hover — jump straight to outreach for
+                    this campaign instead of opening it, finding the tab, then
+                    finding the send button. */}
+                <div
+                  className="pointer-events-none absolute inset-x-0 bottom-0 flex translate-y-full items-center justify-end gap-1.5 bg-gradient-to-t from-white via-white/95 to-transparent p-3 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 dark:from-slate-900 dark:via-slate-900/95"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Link
+                    to="/client/outreach"
+                    className="inline-flex items-center gap-1 rounded-lg bg-brand-gradient px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm transition hover:shadow-glow"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <IconSend width={11} height={11} /> Outreach
+                  </Link>
+                </div>
+              </div>
             ))}
           </div>
         )}

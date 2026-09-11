@@ -102,7 +102,7 @@ export function CampaignsPortal({ tab }: { tab: PortalTab }) {
 
   return (
     <div className="space-y-6">
-      <div className={classNames("card overflow-hidden bg-gradient-to-br p-6 text-white", hero.gradient)}>
+      <div className={classNames("relative overflow-hidden rounded-2xl bg-gradient-to-br bg-gradient-size animate-gradient-x p-6 text-white shadow-glow-lg", hero.gradient)}>
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">{hero.title}</h1>
@@ -126,9 +126,9 @@ export function CampaignsPortal({ tab }: { tab: PortalTab }) {
               key={t.key}
               to={`/client/campaigns/${t.key}`}
               className={
-                "shrink-0 rounded-lg px-4 py-2 text-sm font-semibold transition " +
+                "shrink-0 rounded-lg px-4 py-2 text-sm font-semibold transition-all " +
                 (tab === t.key
-                  ? "bg-brand-600 text-white shadow"
+                  ? "bg-brand-gradient text-white shadow-glow"
                   : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100")
               }
             >
@@ -539,7 +539,7 @@ function CampaignCard({
   return (
     <div
       className={classNames(
-        "card flex cursor-pointer flex-col p-5 transition hover:-translate-y-0.5 hover:shadow-lg",
+        "card flex cursor-pointer flex-col p-5 transition-all duration-200 hover:-translate-y-1 hover:shadow-glow",
         selected ? "ring-2 ring-brand-500" : "hover:border-brand-300 dark:hover:border-brand-700"
       )}
       onClick={() => onNavigate(`/client/campaigns/${c.id}`)}

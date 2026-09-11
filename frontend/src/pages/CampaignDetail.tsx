@@ -58,7 +58,7 @@ export function CampaignDetail({ id }: { id: string }) {
         </Link>
       </div>
 
-      <div className={classNames("card overflow-hidden bg-gradient-to-br p-6 text-white", HERO_GRADIENT[bucket] || HERO_GRADIENT.active)}>
+      <div className={classNames("relative overflow-hidden rounded-2xl bg-gradient-to-br bg-gradient-size animate-gradient-x p-6 text-white shadow-glow-lg", HERO_GRADIENT[bucket] || HERO_GRADIENT.active)}>
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <div className="flex flex-wrap items-center gap-3">
@@ -82,19 +82,19 @@ export function CampaignDetail({ id }: { id: string }) {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <div className="transition hover:-translate-y-0.5">
+        <div className="rounded-2xl transition-all duration-200 hover:-translate-y-1 hover:shadow-glow">
           <KpiCard label="Total Shops" value={c.total_shops} icon={<IconUsers width={18} />} accent="brand" />
         </div>
-        <div className="transition hover:-translate-y-0.5">
+        <div className="rounded-2xl transition-all duration-200 hover:-translate-y-1 hover:shadow-glow">
           <KpiCard label="Completed" value={c.completed_shops} icon={<IconTarget width={18} />} accent="emerald" />
         </div>
-        <div className="transition hover:-translate-y-0.5">
+        <div className="rounded-2xl transition-all duration-200 hover:-translate-y-1 hover:shadow-glow">
           <KpiCard label="Remaining" value={c.remaining_shops} icon={<IconClock width={18} />} accent="amber" />
         </div>
-        <div className="transition hover:-translate-y-0.5">
+        <div className="rounded-2xl transition-all duration-200 hover:-translate-y-1 hover:shadow-glow">
           <KpiCard label="Progress" value={`${pctVal}%`} icon={<IconSend width={18} />} accent="indigo" />
         </div>
-        <div className="transition hover:-translate-y-0.5">
+        <div className="rounded-2xl transition-all duration-200 hover:-translate-y-1 hover:shadow-glow">
           <KpiCard label="Invitations" value={c.outreach?.invitations ?? 0} icon={<IconMail width={18} />} accent="violet" />
         </div>
       </div>
@@ -1591,7 +1591,7 @@ function RequirementParserCard({ campaignId }: { campaignId: string }) {
       </p>
       <textarea
         className="input mt-3 h-20 resize-none text-sm"
-        placeholder="e.g. Need 5 shoppers in Mumbai for retail stores, rating above 4, within 15 km"
+        placeholder="e.g. Need 5 shoppers in Brooklyn for retail stores, rating above 4, within 15 km"
         value={text}
         onChange={(e) => setText(e.target.value)}
       />

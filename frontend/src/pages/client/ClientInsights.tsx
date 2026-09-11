@@ -28,7 +28,7 @@ export function ClientInsights() {
             <Link
               key={ins.campaign_id}
               to={`/client/campaigns/${ins.campaign_id}`}
-              className="card block border p-5 transition hover:shadow-md"
+              className="card-interactive block p-5"
             >
               <div className="flex items-center justify-between">
                 <h3 className="font-semibold text-slate-900 dark:text-white">{ins.campaign_name}</h3>

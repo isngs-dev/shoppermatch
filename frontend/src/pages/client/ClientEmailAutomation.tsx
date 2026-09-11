@@ -120,7 +120,7 @@ function AutomationTrackingTab() {
             {items.map((r: any) => (
               <tr
                 key={r.id}
-                className="cursor-pointer transition hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                className="cursor-pointer transition-colors hover:bg-brand-50/70 dark:hover:bg-brand-950/30"
                 onClick={() => setSelected(r.id)}
               >
                 <td className="td font-medium text-slate-800 dark:text-slate-100">

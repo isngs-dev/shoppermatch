@@ -1,8 +1,20 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { useMemo, type ReactNode } from "react";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { classNames } from "../lib/format";
 import { useTheme } from "../lib/theme";
-import { IconLogout, IconMoon, IconSun } from "./Icons";
+import { CommandPalette, type CommandItem } from "./CommandPalette";
+import {
+  IconCampaign,
+  IconDashboard,
+  IconLogout,
+  IconMail,
+  IconMoon,
+  IconSettings,
+  IconSparkles,
+  IconSun,
+  IconTarget,
+} from "./Icons";
 import { Avatar, Logo } from "./ui";
 import { ClientVoiceAssistant } from "./ClientVoiceAssistant";
 
@@ -16,12 +28,12 @@ import { ClientVoiceAssistant } from "./ClientVoiceAssistant";
 // one part of that page that isn't campaign-scoped (it runs sequences
 // across shoppers/shops directly), so it keeps its own top-level entry.
 const PRIMARY_NAV = [
-  { to: "/client/dashboard", label: "Dashboard" },
-  { to: "/client/campaigns", label: "Campaigns" },
-  { to: "/client/email-automation", label: "Email Automation" },
-  { to: "/client/social-media", label: "Social Media" },
-  { to: "/client/insights", label: "Insights" },
-  { to: "/client/reports", label: "Reports" },
+  { to: "/client/dashboard", label: "Dashboard", icon: <IconDashboard width={16} height={16} /> },
+  { to: "/client/campaigns", label: "Campaigns", icon: <IconCampaign width={16} height={16} /> },
+  { to: "/client/email-automation", label: "Email Automation", icon: <IconMail width={16} height={16} /> },
+  { to: "/client/social-media", label: "Social Media", icon: <IconSparkles width={16} height={16} /> },
+  { to: "/client/insights", label: "Insights", icon: <IconTarget width={16} height={16} /> },
+  { to: "/client/reports", label: "Reports", icon: <IconTarget width={16} height={16} /> },
 ];
 
 // Deliberately a different shape from AdminLayout — a light top-nav SaaS
@@ -31,18 +43,66 @@ const PRIMARY_NAV = [
 export function ClientLayout() {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
+  const navigate = useNavigate();
+
+  // Quick-jump/action list for the Ctrl+K palette — the goal is that any
+  // page or common action is at most two keystrokes away instead of a
+  // multi-click drill-down through nav.
+  const commandItems: CommandItem[] = useMemo(
+    () => [
+      ...PRIMARY_NAV.map((n) => ({
+        id: n.to,
+        label: n.label,
+        hint: "Page",
+        icon: n.icon,
+        run: () => navigate(n.to),
+      })),
+      {
+        id: "new-post",
+        label: "Create a social media post",
+        hint: "Action",
+        icon: <IconSparkles width={16} height={16} />,
+        keywords: "social ai generate image post",
+        run: () => navigate("/client/social-media"),
+      },
+      {
+        id: "outreach",
+        label: "Send bulk outreach",
+        hint: "Action",
+        icon: <IconMail width={16} height={16} />,
+        keywords: "email invite shoppers",
+        run: () => navigate("/client/outreach"),
+      },
+      {
+        id: "profile",
+        label: "Profile & settings",
+        hint: "Account",
+        icon: <IconSettings width={16} height={16} />,
+        run: () => navigate("/client/profile"),
+      },
+      {
+        id: "theme",
+        label: theme === "dark" ? "Switch to light mode" : "Switch to dark mode",
+        hint: "Toggle",
+        icon: theme === "dark" ? <IconSun width={16} height={16} /> : <IconMoon width={16} height={16} />,
+        run: toggle,
+      },
+    ],
+    [navigate, theme, toggle]
+  );
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-950">
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90">
+    <div className="min-h-screen">
+      <header className="glass sticky top-0 z-20 border-b border-slate-200/60 dark:border-slate-800/60">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 sm:px-6">
           <Logo />
           <nav className="ml-2 hidden items-center gap-1 md:flex">
             {PRIMARY_NAV.map((n) => (
-              <NavItem key={n.to} to={n.to} label={n.label} />
+              <NavItem key={n.to} to={n.to} label={n.label} icon={n.icon} />
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-2">
+            <CommandPalette items={commandItems} />
             <button className="btn-ghost" onClick={toggle} aria-label="Toggle theme">
               {theme === "dark" ? <IconSun /> : <IconMoon />}
             </button>
@@ -101,19 +161,20 @@ export function ClientLayout() {
   );
 }
 
-function NavItem({ to, label }: { to: string; label: string }) {
+function NavItem({ to, label, icon }: { to: string; label: string; icon?: ReactNode }) {
   return (
     <NavLink
       to={to}
       className={({ isActive }) =>
         classNames(
-          "rounded-lg px-3 py-2 text-sm font-medium transition whitespace-nowrap",
+          "flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-all whitespace-nowrap",
           isActive
-            ? "bg-brand-600 text-white"
+            ? "bg-brand-gradient text-white shadow-glow"
             : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-900"
         )
       }
     >
+      {icon}
       {label}
     </NavLink>
   );
