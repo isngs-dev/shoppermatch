@@ -183,6 +183,7 @@ async def create_automation(
     voice_call_delay_days: int = 2,
     voice_call_retry_gap_days: int = 3,
     voice_call_max_attempts: int = 2,
+    voice_call_message: str | None = None,
 ) -> EmailAutomation:
     """`shop=None` creates a campaign-wide automation — it spans every shop
     in the campaign at once; each shopper's actual shop then comes from
@@ -214,6 +215,7 @@ async def create_automation(
         voice_call_delay_days=max(0, voice_call_delay_days),
         voice_call_retry_gap_days=max(1, voice_call_retry_gap_days),
         voice_call_max_attempts=max(1, voice_call_max_attempts),
+        voice_call_message=(voice_call_message.strip() if voice_call_message and voice_call_message.strip() else None),
         # First 3 slots are mirrored into the legacy fixed columns too —
         # cheap backward compatibility for any code still reading them.
         step1_template_id=uuid.UUID(resolved_ids[0]) if len(resolved_ids) > 0 else None,

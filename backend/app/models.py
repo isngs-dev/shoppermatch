@@ -511,6 +511,10 @@ class EmailAutomation(Base):
     # an actual no-pickup/voicemail).
     voice_call_retry_gap_days: Mapped[int] = mapped_column(Integer, default=3)
     voice_call_max_attempts: Mapped[int] = mapped_column(Integer, default=2)
+    # Custom opening line read by Twilio's TTS when the call connects — NULL
+    # falls back to the fixed default in services/voice_call_ai.py::opening_line.
+    # Supports {shopper_name}/{shop_name}/{campaign_name} placeholders.
+    voice_call_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_by: Mapped[str] = mapped_column(String(255), default="system")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

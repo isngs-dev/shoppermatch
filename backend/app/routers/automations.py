@@ -53,6 +53,9 @@ class AutomationCreate(BaseModel):
     voice_call_delay_days: int = Field(default=2, ge=0, le=30)
     voice_call_retry_gap_days: int = Field(default=3, ge=1, le=30)
     voice_call_max_attempts: int = Field(default=2, ge=1, le=5)
+    # Custom recorded/scripted opening line Twilio's TTS reads when the call
+    # connects — None keeps the built-in default (services/voice_call_ai.py).
+    voice_call_message: str | None = Field(default=None, max_length=1000)
 
 
 class ShoppersIn(BaseModel):
@@ -157,6 +160,7 @@ def _automation_out(a: EmailAutomation, with_states: bool = True) -> dict:
         "voice_call_delay_days": a.voice_call_delay_days,
         "voice_call_retry_gap_days": a.voice_call_retry_gap_days,
         "voice_call_max_attempts": a.voice_call_max_attempts,
+        "voice_call_message": a.voice_call_message,
         "created_by": a.created_by,
         "created_at": iso(a.created_at),
         "dashboard": dashboard,
@@ -208,6 +212,7 @@ async def create_automation(
         voice_call_delay_days=body.voice_call_delay_days,
         voice_call_retry_gap_days=body.voice_call_retry_gap_days,
         voice_call_max_attempts=body.voice_call_max_attempts,
+        voice_call_message=body.voice_call_message,
     )
     await session.commit()
     automation = await _load(session, automation.id)

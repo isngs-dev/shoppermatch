@@ -364,8 +364,11 @@ export const api = {
     voice_call_delay_days?: number;
     voice_call_retry_gap_days?: number;
     voice_call_max_attempts?: number;
+    voice_call_message?: string | null;
   }) => request("/api/automations", { method: "POST", body }),
   automationVoiceCalls: (automationId: string) => request(`/api/voice-calls/automations/${automationId}`),
+  sendTestVoiceCall: (body: { to_number: string; automation_id?: string; message?: string | null }) =>
+    request("/api/voice-calls/test-call", { method: "POST", body }),
   addAutomationShoppers: (id: string, shopperIds: string[], shopIds?: string[]) =>
     request(`/api/automations/${id}/shoppers`, {
       method: "POST",

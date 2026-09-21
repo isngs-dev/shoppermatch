@@ -114,10 +114,27 @@ async def next_turn(
     return {"say": text, "outcome": None}
 
 
-def opening_line(shopper_name: str, shop_name: str, campaign_name: str) -> str:
+def opening_line(shopper_name: str, shop_name: str, campaign_name: str, custom_message: str | None = None) -> str:
     """The very first thing said when the call connects — no GPT round-trip
-    needed for a fixed, predictable greeting."""
+    needed for a fixed, predictable greeting.
+
+    `custom_message` is the client-configured recorded message
+    (EmailAutomation.voice_call_message); when set it's used verbatim
+    (after filling in {shopper_name}/{first_name}/{shop_name}/{campaign_name}
+    placeholders) instead of the built-in default below."""
     first_name = (shopper_name or "there").split(" ")[0]
+    if custom_message and custom_message.strip():
+        try:
+            return custom_message.format(
+                shopper_name=shopper_name or "there",
+                first_name=first_name,
+                shop_name=shop_name,
+                campaign_name=campaign_name,
+            )
+        except (KeyError, IndexError):
+            # Malformed placeholder in a client-authored message — fall back
+            # to it literally rather than failing the call outright.
+            return custom_message
     return (
         f"Hi {first_name}, this is an automated call from ISN Shopper Recruitment about the "
         f"{shop_name} mystery shopping opportunity you were emailed about. Are you still interested?"

@@ -250,6 +250,7 @@ function AutomationBuilder({
   const [voiceCallDelayInput, setVoiceCallDelayInput] = useState("2");
   const [voiceCallRetryGapInput, setVoiceCallRetryGapInput] = useState("3");
   const [voiceCallMaxAttemptsInput, setVoiceCallMaxAttemptsInput] = useState("2");
+  const [voiceCallMessage, setVoiceCallMessage] = useState("");
   const voiceCallDelayDays = Math.max(0, parseInt(voiceCallDelayInput, 10) || 0);
   const voiceCallRetryGapDays = Math.max(1, parseInt(voiceCallRetryGapInput, 10) || 1);
   const voiceCallMaxAttempts = Math.max(1, parseInt(voiceCallMaxAttemptsInput, 10) || 1);
@@ -350,6 +351,7 @@ function AutomationBuilder({
         voice_call_delay_days: voiceCallDelayDays,
         voice_call_retry_gap_days: voiceCallRetryGapDays,
         voice_call_max_attempts: voiceCallMaxAttempts,
+        voice_call_message: voiceCallMessage.trim() || null,
       });
       await api.addAutomationShoppers(
         automation.id,
@@ -519,6 +521,26 @@ function AutomationBuilder({
                   onChange={(e) => setVoiceCallMaxAttemptsInput(e.target.value)}
                 />
               </div>
+              <div className="sm:col-span-3">
+                <label className="label">Recorded message (what Twilio says when the call connects)</label>
+                <textarea
+                  className="input min-h-[72px]"
+                  placeholder={
+                    'Leave blank to use the default: "Hi {first_name}, this is an automated call from ISN Shopper ' +
+                    'Recruitment about the {shop_name} mystery shopping opportunity you were emailed about. ' +
+                    'Are you still interested?"'
+                  }
+                  value={voiceCallMessage}
+                  onChange={(e) => setVoiceCallMessage(e.target.value)}
+                  maxLength={1000}
+                />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Optional placeholders: <code>{"{first_name}"}</code>, <code>{"{shopper_name}"}</code>,{" "}
+                  <code>{"{shop_name}"}</code>, <code>{"{campaign_name}"}</code>. Read aloud by Twilio's
+                  text-to-speech voice — the shopper can still reply and the AI conversation continues normally
+                  after this opening line.
+                </p>
+              </div>
             </div>
           )}
         </div>
@@ -626,6 +648,8 @@ export function AutomationDetailPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [previewFor, setPreviewFor] = useState<{ shopperId: string; step: number } | null>(null);
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
+  const [testNumber, setTestNumber] = useState("");
+  const [testCalling, setTestCalling] = useState(false);
 
   useEffect(() => {
     const id = window.setInterval(reload, 6000);
@@ -643,6 +667,23 @@ export function AutomationDetailPage() {
       toast(e?.message || `Failed to ${action} automation`, "error");
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function sendTestCall() {
+    const to = testNumber.trim();
+    if (!to) {
+      toast("Enter a phone number in E.164 format, e.g. +918691969772", "error");
+      return;
+    }
+    setTestCalling(true);
+    try {
+      const res = await api.sendTestVoiceCall({ to_number: to, automation_id: automationId! });
+      toast(`Test call placed to ${res.to_number} (SID ${res.call_sid}).`, "success");
+    } catch (e: any) {
+      toast(e?.message || "Failed to place test call", "error");
+    } finally {
+      setTestCalling(false);
     }
   }
 
@@ -735,12 +776,34 @@ export function AutomationDetailPage() {
               Wait {data.voice_call_delay_days}d after last email · retry every {data.voice_call_retry_gap_days}d · up to {data.voice_call_max_attempts} attempt(s)
             </span>
           </div>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            <span className="font-medium text-slate-600 dark:text-slate-300">Opening message:</span>{" "}
+            {data.voice_call_message ? `"${data.voice_call_message}"` : "(default script)"}
+          </p>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <KpiCard label="Calls Placed" value={d.voice_calls_placed} accent="indigo" />
             <KpiCard label="Interested" value={d.voice_call_interested} accent="emerald" />
             <KpiCard label="Not Interested" value={d.voice_call_not_interested} accent="rose" />
             <KpiCard label="Awaiting Call" value={d.voice_call_pending} accent="amber" />
           </div>
+          <div className="mt-4 flex flex-wrap items-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+            <div className="flex-1 min-w-[220px]">
+              <label className="label">Send a real test call (E.164, e.g. +918691969772)</label>
+              <input
+                className="input"
+                placeholder="+918691969772"
+                value={testNumber}
+                onChange={(e) => setTestNumber(e.target.value)}
+              />
+            </div>
+            <button className="btn-secondary h-9" onClick={sendTestCall} disabled={testCalling}>
+              {testCalling ? <Spinner /> : null} Send Test Call
+            </button>
+          </div>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Places one real outbound Twilio call using this automation's opening message above, then hangs up —
+            for verifying the message/connectivity, not the full AI conversation.
+          </p>
         </div>
       )}
 

@@ -106,6 +106,8 @@ _RETROFIT_COLUMNS: list[tuple[str, str, str]] = [
     ("shopper_automation_states", "voice_call_next_at", "TIMESTAMP WITH TIME ZONE"),
     ("shopper_automation_states", "voice_call_outcome", "VARCHAR(20)"),
     ("shopper_automation_states", "voice_call_last_at", "TIMESTAMP WITH TIME ZONE"),
+    # AI Voice Call Follow-Up: custom opening message (migration 0020)
+    ("email_automations", "voice_call_message", "TEXT"),
 ]
 
 # email_automations.shop_id started out NOT NULL (one automation per shop);
