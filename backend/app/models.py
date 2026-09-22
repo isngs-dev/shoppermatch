@@ -654,6 +654,13 @@ class BulkCallBatch(Base):
     total_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(20), default="running")  # running|completed
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Optional — set when launched from one automation's own AI Voice Call
+    # Follow-Up card (so it can default to that automation's own script and
+    # be filtered back to just that automation's history). NULL for an
+    # ad-hoc batch of raw numbers with no automation behind them.
+    automation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("email_automations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     targets: Mapped[list["BulkCallTarget"]] = relationship(
         back_populates="batch", cascade="all, delete-orphan", order_by="BulkCallTarget.created_at"

@@ -51,7 +51,14 @@ async def _admin_auth() -> dict:
 
 async def _nike_campaign_and_shop(auth: dict) -> tuple[dict, dict]:
     async with _client() as client:
-        nike = next(c for c in (await client.get("/api/campaigns", headers=auth)).json()["items"] if "Nike" in c["name"])
+        # Several seeded campaigns now have "Nike" in their name (one per
+        # bucket — active/upcoming/completed) — outreach/voice-call actions
+        # need the active one specifically, not just any name match.
+        nike = next(
+            c
+            for c in (await client.get("/api/campaigns", headers=auth)).json()["items"]
+            if "Nike" in c["name"] and c["status"] == "active"
+        )
         shop = (await client.get("/api/shops", params={"campaign_id": nike["id"]}, headers=auth)).json()["items"][0]
         return nike, shop
 

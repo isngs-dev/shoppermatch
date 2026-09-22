@@ -487,6 +487,7 @@ def _bulk_batch_out(b: BulkCallBatch, with_targets: bool = True) -> dict:
         "total_count": b.total_count,
         "status": b.status,
         "created_at": iso(b.created_at),
+        "automation_id": str(b.automation_id) if b.automation_id else None,
     }
     if with_targets:
         targets = b.targets
@@ -502,6 +503,11 @@ class BulkCallCreate(BaseModel):
     # auto-prepended with "+", same leniency as /test-call.
     numbers: list[str] = Field(min_length=1, max_length=MAX_BULK_CALL_TARGETS)
     message: str | None = Field(default=None, max_length=1000)
+    # Launched from one automation's own AI Voice Call Follow-Up card — when
+    # given and `message` is left blank, falls back to that automation's own
+    # configured script (same "explicit message always wins" rule /test-call
+    # already uses), and the batch is filterable back to that automation.
+    automation_id: uuid.UUID | None = None
 
 
 @router.post("/bulk")
@@ -516,6 +522,16 @@ async def create_bulk_call_batch(
             detail="Voice Call Follow-Up is not configured — set PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN and PLIVO_PHONE_NUMBER.",
         )
 
+    message = body.message
+    if not message and body.automation_id:
+        from ..services import automation as engine
+
+        automation = await engine.load_automation(session, body.automation_id)
+        if automation is None:
+            raise HTTPException(status_code=404, detail="Automation not found")
+        enforce_campaign_access(automation.campaign, user)
+        message = automation.voice_call_message
+
     cleaned: list[str] = []
     seen: set[str] = set()
     for raw in body.numbers:
@@ -528,7 +544,13 @@ async def create_bulk_call_batch(
             seen.add(n)
             cleaned.append(n)
 
-    batch = BulkCallBatch(created_by=user.email, message=body.message, total_count=len(cleaned), status="running")
+    batch = BulkCallBatch(
+        created_by=user.email,
+        message=message,
+        total_count=len(cleaned),
+        status="running",
+        automation_id=body.automation_id,
+    )
     session.add(batch)
     await session.flush()
     session.add_all([BulkCallTarget(batch_id=batch.id, phone_number=n) for n in cleaned])
@@ -559,6 +581,7 @@ async def create_bulk_call_batch(
 
 @router.get("/bulk")
 async def list_bulk_call_batches(
+    automation_id: uuid.UUID | None = None,
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_operator),
 ):
@@ -568,6 +591,8 @@ async def list_bulk_call_batches(
         .limit(20)
         .options(selectinload(BulkCallBatch.targets))
     )
+    if automation_id:
+        stmt = stmt.where(BulkCallBatch.automation_id == automation_id)
     batches = (await session.execute(stmt)).scalars().all()
     return {"items": [_bulk_batch_out(b) for b in batches]}
 

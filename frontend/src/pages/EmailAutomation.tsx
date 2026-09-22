@@ -654,11 +654,33 @@ export function AutomationDetailPage() {
   const [scriptDraft, setScriptDraft] = useState("");
   const [savingScript, setSavingScript] = useState(false);
   const [realCalling, setRealCalling] = useState<string | null>(null);
+  const [bulkNumbersText, setBulkNumbersText] = useState("");
+  const [bulkStarting, setBulkStarting] = useState(false);
+  const [activeBulkBatchId, setActiveBulkBatchId] = useState<string | null>(null);
 
   useEffect(() => {
     const id = window.setInterval(reload, 6000);
     return () => window.clearInterval(id);
   }, [reload]);
+
+  const { data: bulkBatch, reload: reloadBulkBatch } = useApi(
+    () => (activeBulkBatchId ? api.bulkCallBatch(activeBulkBatchId) : Promise.resolve(null)),
+    [activeBulkBatchId]
+  );
+  useEffect(() => {
+    if (!activeBulkBatchId || bulkBatch?.status === "completed") return;
+    const id = window.setInterval(reloadBulkBatch, 3000);
+    return () => window.clearInterval(id);
+  }, [activeBulkBatchId, bulkBatch?.status, reloadBulkBatch]);
+
+  const bulkNumbers = useMemo(
+    () =>
+      bulkNumbersText
+        .split(/[\n,]/)
+        .map((n) => n.trim())
+        .filter(Boolean),
+    [bulkNumbersText]
+  );
 
   async function act(action: "start" | "pause" | "resume" | "stop") {
     setBusy(action);
@@ -715,6 +737,23 @@ export function AutomationDetailPage() {
       toast(e?.message || "Failed to place test call", "error");
     } finally {
       setTestCalling(false);
+    }
+  }
+
+  async function sendBulkCalls() {
+    if (bulkNumbers.length === 0) {
+      toast("Paste at least one phone number.", "error");
+      return;
+    }
+    setBulkStarting(true);
+    try {
+      const res = await api.createBulkCallBatch(bulkNumbers, null, automationId!);
+      toast(`Bulk call batch started — ${bulkNumbers.length} number(s), calling one at a time with this automation's script.`, "success");
+      setActiveBulkBatchId(res.id);
+    } catch (e: any) {
+      toast(e?.message || "Failed to start the bulk call batch", "error");
+    } finally {
+      setBulkStarting(false);
     }
   }
 
@@ -867,6 +906,72 @@ export function AutomationDetailPage() {
             for verifying the message/connectivity, not the full AI conversation. To actually talk back and
             forth with the AI, use "🎙 Real AI Call" next to a shopper below instead.
           </p>
+
+          <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-800">
+            <label className="label">
+              Send bulk calls (E.164, one per line or comma-separated) — {bulkNumbers.length}
+            </label>
+            <p className="mb-1.5 text-[11px] text-slate-400">
+              Each number gets the full AI conversation (listens and responds), one after another, using this
+              automation's opening message above.
+            </p>
+            <textarea
+              className="input h-24 resize-none font-mono text-xs"
+              placeholder={"+918691969772\n+919890068591\n+919653491090"}
+              value={bulkNumbersText}
+              onChange={(e) => setBulkNumbersText(e.target.value)}
+            />
+            <button
+              className="btn-primary mt-2 h-9"
+              onClick={sendBulkCalls}
+              disabled={bulkStarting || bulkNumbers.length === 0}
+            >
+              {bulkStarting ? <Spinner /> : null} Send Bulk Calls ({bulkNumbers.length})
+            </button>
+
+            {bulkBatch && (
+              <div className="mt-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                    Batch {fmtDateTime(bulkBatch.created_at)}
+                  </span>
+                  <Badge className={bulkBatch.status === "completed" ? STATUS_BADGE.completed : VOICE_CALL_BADGE.calling}>
+                    {bulkBatch.status === "completed" ? "Completed" : "Running"}
+                  </Badge>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <KpiCard label="Total" value={bulkBatch.total_count} accent="brand" />
+                  <KpiCard label="Placed" value={bulkBatch.placed ?? 0} accent="indigo" />
+                  <KpiCard label="Completed" value={bulkBatch.completed ?? 0} accent="emerald" />
+                  <KpiCard label="Failed" value={bulkBatch.failed ?? 0} accent="rose" />
+                </div>
+                <div className="mt-3 max-h-56 overflow-y-auto rounded-lg border border-slate-100 dark:border-slate-800">
+                  <table className="min-w-full text-sm">
+                    <thead className="border-b border-slate-100 dark:border-slate-800">
+                      <tr>
+                        <th className="th">Number</th>
+                        <th className="th">Status</th>
+                        <th className="th">Outcome</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
+                      {(bulkBatch.targets || []).map((t: any) => (
+                        <tr key={t.id}>
+                          <td className="td font-mono text-xs">{t.phone_number}</td>
+                          <td className="td">
+                            <Badge className={VOICE_CALL_BADGE[t.status.replace("-", "_")] || VOICE_CALL_BADGE.default}>
+                              {cap(t.status.replace(/[-_]/g, " "))}
+                            </Badge>
+                          </td>
+                          <td className="td text-slate-500">{t.outcome ? cap(t.outcome.replace("_", " ")) : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
