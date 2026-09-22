@@ -32,4 +32,13 @@ EXPOSE 8000
 # Shell form (not exec-array) so $PORT expands — Railway (and similar PaaS
 # hosts) inject their own port and expect the process to bind to it; 8000
 # remains the default for `docker run`/compose where nothing sets $PORT.
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+#
+# --proxy-headers --forwarded-allow-ips='*': Render (and Railway) terminate
+# TLS at their edge and forward plain HTTP to this container — without this,
+# request.url.scheme inside the app always reads "http" even though the
+# real client request was "https". That broke Plivo's webhook signature
+# verification (computed over the URL Plivo actually used, i.e. https) and
+# any URL this app builds from request.url instead of PUBLIC_BASE_URL.
+# Trusting forwarded headers from any hop is standard/safe here since
+# Render's edge is the only way in.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'
