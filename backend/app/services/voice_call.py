@@ -15,6 +15,7 @@ PLIVO_AUTH_ID/AUTH_TOKEN/PHONE_NUMBER are set.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import quote
 from xml.sax.saxutils import escape
@@ -48,10 +49,18 @@ async def create_call(to_number: str, answer_url: str, hangup_url: str) -> str:
 
     _require_configured()
     client = plivo.RestClient(settings.plivo_auth_id, settings.plivo_auth_token)
+    # Plivo's `to_`/`from_` params want bare digits (country code + number,
+    # e.g. "918691969772") — unlike Twilio, a leading "+" (or any stored
+    # formatting like spaces/dashes/parens) makes Plivo reject it as "not a
+    # valid number". Callers everywhere else in this app still store/display
+    # E.164 (+91...) since that's the sane universal format — this is the
+    # one place it gets stripped down for the actual API call.
+    plivo_to = re.sub(r"\D", "", to_number)
+    plivo_from = re.sub(r"\D", "", settings.plivo_phone_number or "")
     try:
         result = client.calls.create(
-            from_=settings.plivo_phone_number,
-            to_=to_number,
+            from_=plivo_from,
+            to_=plivo_to,
             answer_url=answer_url,
             answer_method="POST",
             hangup_url=hangup_url,
