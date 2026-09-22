@@ -164,7 +164,7 @@ async def call_connected(state_id: uuid.UUID, request: Request, session: AsyncSe
         state.automation.campaign.name if state.automation.campaign else "",
         state.automation.voice_call_message,
     )
-    gather_url = f"{request.url.scheme}://{request.url.netloc}/api/voice-calls/gather/{state_id}"
+    gather_url = f"{settings.public_base_url.rstrip('/')}/api/voice-calls/gather/{state_id}"
     return _xml(plxml_say_gather(greeting, gather_url))
 
 
@@ -223,7 +223,7 @@ async def call_gather(state_id: uuid.UUID, request: Request, session: AsyncSessi
         return _xml(plxml_say_gather(turn["say"], "", hang_up_after=True))
 
     await session.commit()
-    gather_url = f"{request.url.scheme}://{request.url.netloc}/api/voice-calls/gather/{state_id}"
+    gather_url = f"{settings.public_base_url.rstrip('/')}/api/voice-calls/gather/{state_id}"
     return _xml(plxml_say_gather(turn["say"], gather_url))
 
 
