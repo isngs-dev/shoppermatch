@@ -483,7 +483,7 @@ function AutomationBuilder({
           </label>
           <p className="mt-1 text-[11px] text-slate-400">
             If a shopper never replies to any of the email steps above, place a real phone call — an AI
-            voice conversation asks whether they're still interested. Requires Twilio to be configured
+            voice conversation asks whether they're still interested. Requires Plivo to be configured
             server-side; if it isn't, this stays off with no effect on the email sequence.
           </p>
           {voiceCallEnabled && (
@@ -522,7 +522,7 @@ function AutomationBuilder({
                 />
               </div>
               <div className="sm:col-span-3">
-                <label className="label">Recorded message (what Twilio says when the call connects)</label>
+                <label className="label">Recorded message (what Plivo says when the call connects)</label>
                 <textarea
                   className="input min-h-[72px]"
                   placeholder={
@@ -536,7 +536,7 @@ function AutomationBuilder({
                 />
                 <p className="mt-1 text-[11px] text-slate-400">
                   Optional placeholders: <code>{"{first_name}"}</code>, <code>{"{shopper_name}"}</code>,{" "}
-                  <code>{"{shop_name}"}</code>, <code>{"{campaign_name}"}</code>. Read aloud by Twilio's
+                  <code>{"{shop_name}"}</code>, <code>{"{campaign_name}"}</code>. Read aloud by Plivo's
                   text-to-speech voice — the shopper can still reply and the AI conversation continues normally
                   after this opening line.
                 </p>
@@ -801,7 +801,7 @@ export function AutomationDetailPage() {
             </button>
           </div>
           <p className="mt-1 text-[11px] text-slate-400">
-            Places one real outbound Twilio call using this automation's opening message above, then hangs up —
+            Places one real outbound Plivo call using this automation's opening message above, then hangs up —
             for verifying the message/connectivity, not the full AI conversation.
           </p>
         </div>

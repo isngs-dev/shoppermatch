@@ -511,7 +511,7 @@ class EmailAutomation(Base):
     # an actual no-pickup/voicemail).
     voice_call_retry_gap_days: Mapped[int] = mapped_column(Integer, default=3)
     voice_call_max_attempts: Mapped[int] = mapped_column(Integer, default=2)
-    # Custom opening line read by Twilio's TTS when the call connects — NULL
+    # Custom opening line read by Plivo's TTS when the call connects — NULL
     # falls back to the fixed default in services/voice_call_ai.py::opening_line.
     # Supports {shopper_name}/{shop_name}/{campaign_name} placeholders.
     voice_call_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -612,9 +612,9 @@ class ShopperAutomationStatus:
 # --------------------------------------------------------------------------- #
 # AI Voice Call Follow-Up — one row per outbound call attempt (retries each
 # get their own row, unlike ShopperAutomationState.voice_call_* which only
-# ever reflects the latest attempt). See services/voice_call.py (Twilio) and
+# ever reflects the latest attempt). See services/voice_call.py (Plivo) and
 # services/voice_call_ai.py (the GPT-driven conversation). Transcript is a
-# JSON list of {role, text} turns — never contains anything Twilio considers
+# JSON list of {role, text} turns — never contains anything Plivo considers
 # a credential; the auth token itself lives only in settings/env, never here.
 # --------------------------------------------------------------------------- #
 class VoiceCallLog(Base):

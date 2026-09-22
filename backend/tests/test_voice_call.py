@@ -1,15 +1,16 @@
-"""AI Voice Call Follow-Up tests — Twilio call initiation, webhook signature
-verification, TwiML conversation turns, retry/threshold logic, daily cap,
+"""AI Voice Call Follow-Up tests — Plivo call initiation, webhook signature
+verification, PLXML conversation turns, retry/threshold logic, daily cap,
 and permission isolation.
 
-Every Twilio/OpenAI call is mocked (monkeypatched at the function boundary
+Every Plivo/OpenAI call is mocked (monkeypatched at the function boundary
 services.voice_call.create_call / services.voice_call_ai.next_turn) — this
-suite makes zero real network calls to Twilio or OpenAI.
+suite makes zero real network calls to Plivo or OpenAI.
 """
 from __future__ import annotations
 
 import uuid
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -68,10 +69,10 @@ async def _make_shopper(phone: str | None = "+15551234567") -> str:
         return str(shopper.id)
 
 
-def _enable_twilio(monkeypatch):
-    monkeypatch.setattr(settings, "twilio_account_sid", "AC_test")
-    monkeypatch.setattr(settings, "twilio_auth_token", "test_auth_token")
-    monkeypatch.setattr(settings, "twilio_phone_number", "+15550000000")
+def _enable_plivo(monkeypatch):
+    monkeypatch.setattr(settings, "plivo_auth_id", "MA_test")
+    monkeypatch.setattr(settings, "plivo_auth_token", "test_auth_token")
+    monkeypatch.setattr(settings, "plivo_phone_number", "+15550000000")
 
 
 async def _create_automation_with_no_response_state(
@@ -122,7 +123,7 @@ async def _create_automation_with_no_response_state(
 # Scheduler: eligibility, placing calls, retries, caps
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
-async def test_scheduler_does_nothing_when_twilio_not_configured():
+async def test_scheduler_does_nothing_when_plivo_not_configured():
     await _fresh_db()
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
@@ -136,15 +137,15 @@ async def test_scheduler_does_nothing_when_twilio_not_configured():
 @pytest.mark.asyncio
 async def test_scheduler_places_call_when_due_and_configured(monkeypatch):
     await _fresh_db()
-    _enable_twilio(monkeypatch)
+    _enable_plivo(monkeypatch)
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     automation_id, state_id = await _create_automation_with_no_response_state(auth, campaign, shop, shopper_id, delay_days=0)
 
-    async def fake_create_call(to_number, twiml_url, status_url):
+    async def fake_create_call(to_number, answer_url, hangup_url):
         assert to_number == "+15551234567"
-        return "CA_fake_sid"
+        return "fake-request-uuid"
 
     monkeypatch.setattr("app.services.voice_call_scheduler.create_call", fake_create_call)
 
@@ -167,7 +168,7 @@ async def test_scheduler_places_call_when_due_and_configured(monkeypatch):
 @pytest.mark.asyncio
 async def test_scheduler_skips_state_before_delay_elapses(monkeypatch):
     await _fresh_db()
-    _enable_twilio(monkeypatch)
+    _enable_plivo(monkeypatch)
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
@@ -192,7 +193,7 @@ async def test_scheduler_skips_state_before_delay_elapses(monkeypatch):
 @pytest.mark.asyncio
 async def test_missing_phone_number_fails_without_retry(monkeypatch):
     await _fresh_db()
-    _enable_twilio(monkeypatch)
+    _enable_plivo(monkeypatch)
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
     shopper_id = await _make_shopper(phone=None)
@@ -212,7 +213,7 @@ async def test_missing_phone_number_fails_without_retry(monkeypatch):
 @pytest.mark.asyncio
 async def test_daily_call_cap_is_enforced(monkeypatch):
     await _fresh_db()
-    _enable_twilio(monkeypatch)
+    _enable_plivo(monkeypatch)
     monkeypatch.setattr(settings, "voice_call_daily_limit", 1)
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
@@ -222,8 +223,8 @@ async def test_daily_call_cap_is_enforced(monkeypatch):
     await _create_automation_with_no_response_state(auth, campaign, shop, shopper_a)
     await _create_automation_with_no_response_state(auth, campaign, shop, shopper_b)
 
-    async def fake_create_call(to_number, twiml_url, status_url):
-        return "CA_fake_sid"
+    async def fake_create_call(to_number, answer_url, hangup_url):
+        return "fake-request-uuid"
 
     monkeypatch.setattr("app.services.voice_call_scheduler.create_call", fake_create_call)
 
@@ -238,7 +239,7 @@ async def test_daily_call_cap_is_enforced(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_initiation_failure_schedules_retry_then_fails(monkeypatch):
     await _fresh_db()
-    _enable_twilio(monkeypatch)
+    _enable_plivo(monkeypatch)
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
@@ -246,8 +247,8 @@ async def test_call_initiation_failure_schedules_retry_then_fails(monkeypatch):
         auth, campaign, shop, shopper_id, max_attempts=2, retry_gap_days=3
     )
 
-    async def always_fails(to_number, twiml_url, status_url):
-        raise RuntimeError("Twilio API unreachable")
+    async def always_fails(to_number, answer_url, hangup_url):
+        raise RuntimeError("Plivo API unreachable")
 
     monkeypatch.setattr("app.services.voice_call_scheduler.create_call", always_fails)
 
@@ -269,10 +270,15 @@ async def test_call_initiation_failure_schedules_retry_then_fails(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# TwiML webhooks
+# PLXML webhooks
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
-async def test_twiml_endpoint_returns_greeting(monkeypatch):
+async def test_answer_endpoint_returns_greeting(monkeypatch):
+    # Explicit, not just "leave it unset" — a developer's own .env may have
+    # real PLIVO_AUTH_TOKEN configured for actually placing calls locally,
+    # which would otherwise make this test's unsigned request correctly (but
+    # unexpectedly, for this test) fail signature verification.
+    monkeypatch.setattr(settings, "plivo_auth_token", None)
     await _fresh_db()
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
@@ -280,16 +286,16 @@ async def test_twiml_endpoint_returns_greeting(monkeypatch):
     automation_id, state_id = await _create_automation_with_no_response_state(auth, campaign, shop, shopper_id)
 
     async with _client() as client:
-        r = await client.post(f"/api/voice-calls/twiml/{state_id}", data={"CallSid": "CA123"})
+        r = await client.post(f"/api/voice-calls/answer/{state_id}", data={"CallUUID": "CA123"})
         assert r.status_code == 200
-        assert "<Gather" in r.text
+        assert "<GetInput" in r.text
         assert "Test Shopper" in r.text or "Hi Test" in r.text
 
 
 @pytest.mark.asyncio
-async def test_twiml_rejects_bad_signature_when_configured(monkeypatch):
+async def test_answer_rejects_bad_signature_when_configured(monkeypatch):
     await _fresh_db()
-    monkeypatch.setattr(settings, "twilio_auth_token", "real-secret")
+    monkeypatch.setattr(settings, "plivo_auth_token", "real-secret")
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
@@ -297,17 +303,21 @@ async def test_twiml_rejects_bad_signature_when_configured(monkeypatch):
 
     async with _client() as client:
         r = await client.post(
-            f"/api/voice-calls/twiml/{state_id}", data={"CallSid": "CA123"}, headers={"X-Twilio-Signature": "wrong"}
+            f"/api/voice-calls/answer/{state_id}",
+            data={"CallUUID": "CA123"},
+            headers={"X-Plivo-Signature-V3": "wrong", "X-Plivo-Signature-V3-Nonce": "nonce123"},
         )
         assert r.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_gather_endpoint_concludes_call_on_outcome(monkeypatch):
-    # No _enable_twilio here on purpose: no TWILIO_AUTH_TOKEN configured
-    # means signature verification auto-passes (see verify_twilio_signature),
-    # matching how Twilio wouldn't be "configured" but the webhook itself
-    # doesn't gate on is_configured() — only the scheduler does.
+    # Explicitly unset (not just omitted) — a developer's own .env may have
+    # a real PLIVO_AUTH_TOKEN, which would otherwise make signature
+    # verification actually run against this test's unsigned request instead
+    # of auto-passing. The webhook itself doesn't gate on is_configured()
+    # (only the scheduler does) — it's purely about whether a token exists.
+    monkeypatch.setattr(settings, "plivo_auth_token", None)
     await _fresh_db()
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
@@ -328,7 +338,7 @@ async def test_gather_endpoint_concludes_call_on_outcome(monkeypatch):
     async with _client() as client:
         r = await client.post(
             f"/api/voice-calls/gather/{state_id}",
-            data={"SpeechResult": "Yes, I'm interested!", "CallSid": "CA123"},
+            data={"Speech": "Yes, I'm interested!", "CallUUID": "CA123"},
         )
         assert r.status_code == 200
         assert "<Hangup/>" in r.text
@@ -342,6 +352,7 @@ async def test_gather_endpoint_concludes_call_on_outcome(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_gather_endpoint_continues_conversation_without_outcome(monkeypatch):
+    monkeypatch.setattr(settings, "plivo_auth_token", None)
     await _fresh_db()
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
@@ -360,13 +371,13 @@ async def test_gather_endpoint_continues_conversation_without_outcome(monkeypatc
     monkeypatch.setattr("app.routers.voice_calls.next_turn", fake_next_turn)
 
     async with _client() as client:
-        r = await client.post(f"/api/voice-calls/gather/{state_id}", data={"SpeechResult": "hmm", "CallSid": "CA123"})
+        r = await client.post(f"/api/voice-calls/gather/{state_id}", data={"Speech": "hmm", "CallUUID": "CA123"})
         assert r.status_code == 200
-        # Still mid-conversation: another <Gather> is offered (the trailing
-        # fallback <Say>+<Hangup/> is always present too — it only fires if
-        # THIS Gather itself times out with no speech, not a sign the call
+        # Still mid-conversation: another <GetInput> is offered (the trailing
+        # fallback <Speak>+<Hangup/> is always present too — it only fires if
+        # THIS GetInput itself times out with no speech, not a sign the call
         # already ended).
-        assert "<Gather" in r.text
+        assert "<GetInput" in r.text
         assert "Sorry, could you tell me more?" in r.text
 
     async with AsyncSessionLocal() as session:
@@ -376,7 +387,8 @@ async def test_gather_endpoint_continues_conversation_without_outcome(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_status_callback_no_answer_schedules_retry():
+async def test_status_callback_no_answer_schedules_retry(monkeypatch):
+    monkeypatch.setattr(settings, "plivo_auth_token", None)
     await _fresh_db()
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
@@ -392,7 +404,7 @@ async def test_status_callback_no_answer_schedules_retry():
         await session.commit()
 
     async with _client() as client:
-        r = await client.post(f"/api/voice-calls/status/{state_id}", data={"CallStatus": "no-answer", "CallSid": "CA123"})
+        r = await client.post(f"/api/voice-calls/status/{state_id}", data={"CallStatus": "no-answer", "CallUUID": "CA123"})
         assert r.status_code == 204
 
     async with AsyncSessionLocal() as session:
@@ -402,9 +414,10 @@ async def test_status_callback_no_answer_schedules_retry():
 
 
 @pytest.mark.asyncio
-async def test_status_callback_never_overwrites_a_concluded_outcome():
+async def test_status_callback_never_overwrites_a_concluded_outcome(monkeypatch):
     """A late status callback for a call that already got a real outcome via
     /gather must never clobber it back to no_answer/undecided."""
+    monkeypatch.setattr(settings, "plivo_auth_token", None)
     await _fresh_db()
     auth = await _admin_auth()
     campaign, shop = await _nike_campaign_and_shop(auth)
@@ -417,7 +430,7 @@ async def test_status_callback_never_overwrites_a_concluded_outcome():
         await session.commit()
 
     async with _client() as client:
-        r = await client.post(f"/api/voice-calls/status/{state_id}", data={"CallStatus": "completed", "CallSid": "CA123"})
+        r = await client.post(f"/api/voice-calls/status/{state_id}", data={"CallStatus": "completed", "CallUUID": "CA123"})
         assert r.status_code == 204
 
     async with AsyncSessionLocal() as session:
@@ -427,24 +440,41 @@ async def test_status_callback_never_overwrites_a_concluded_outcome():
 
 
 # --------------------------------------------------------------------------- #
-# Permission isolation
+# Signature verification
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
-async def test_voice_call_signature_helper_accepts_valid_and_rejects_tampered():
-    settings.twilio_auth_token = "shh"
-    try:
-        url = "https://example.com/api/voice-calls/twiml/abc"
-        params = {"CallSid": "CA1", "From": "+15551234567"}
-        import base64
-        import hashlib
-        import hmac
+async def test_voice_call_signature_helper_bypasses_when_not_configured():
+    settings.plivo_auth_token = None
+    assert voice_call.verify_plivo_signature("POST", "https://example.com/x", None, None, {}) is True
 
-        data = url
-        for k in sorted(params.keys()):
-            data += k + params[k]
-        valid_sig = base64.b64encode(hmac.new(b"shh", data.encode(), hashlib.sha1).digest()).decode()
-        assert voice_call.verify_twilio_signature(url, params, valid_sig) is True
-        assert voice_call.verify_twilio_signature(url, params, "tampered") is False
-        assert voice_call.verify_twilio_signature(url, params, None) is False
+
+@pytest.mark.asyncio
+async def test_voice_call_signature_helper_rejects_missing_signature_or_nonce():
+    settings.plivo_auth_token = "shh"
+    try:
+        url = "https://example.com/api/voice-calls/answer/abc"
+        params = {"CallUUID": "CA1", "From": "+15551234567"}
+        assert voice_call.verify_plivo_signature("POST", url, "nonce123", None, params) is False
+        assert voice_call.verify_plivo_signature("POST", url, None, "some-signature", params) is False
     finally:
-        settings.twilio_auth_token = None
+        settings.plivo_auth_token = None
+
+
+@pytest.mark.asyncio
+async def test_voice_call_signature_helper_delegates_to_plivo_sdk():
+    # Hand-computing Plivo's V3 HMAC-SHA256-over-sorted-params-plus-nonce
+    # algorithm here would just duplicate (and risk silently diverging from)
+    # the official SDK's own implementation — instead this verifies our
+    # wrapper calls plivo.utils.validate_v3_signature with the right
+    # arguments and correctly passes through its True/False verdict.
+    settings.plivo_auth_token = "shh"
+    try:
+        url = "https://example.com/api/voice-calls/answer/abc"
+        params = {"CallUUID": "CA1", "From": "+15551234567"}
+        with patch("plivo.utils.validate_v3_signature", return_value=True) as mocked:
+            assert voice_call.verify_plivo_signature("POST", url, "nonce123", "sig123", params) is True
+            mocked.assert_called_once_with("POST", url, "nonce123", "shh", "sig123", params)
+        with patch("plivo.utils.validate_v3_signature", return_value=False):
+            assert voice_call.verify_plivo_signature("POST", url, "nonce123", "sig123", params) is False
+    finally:
+        settings.plivo_auth_token = None

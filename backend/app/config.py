@@ -182,17 +182,19 @@ class Settings(BaseSettings):
     social_publisher_max_attempts: int = 3
 
     # ----- AI Voice Call Follow-Up (Email Automation step 07) -----
-    # Real outbound calls via Twilio Programmable Voice — inert (calls never
-    # actually dial) until all three are set, same "not configured" posture
-    # as Facebook/OpenAI elsewhere in this app. TWILIO_PHONE_NUMBER is the
-    # E.164 number ("From") Twilio dials out from.
-    twilio_account_sid: str | None = None
-    twilio_auth_token: str | None = None
-    twilio_phone_number: str | None = None
-    # A Twilio built-in Amazon Polly neural voice — realistic, US-accented,
-    # zero extra TTS integration needed (see services/voice_call.py). Full
-    # list: https://www.twilio.com/docs/voice/twiml/say/text-speech#available-voices-and-languages
-    twilio_voice: str = "Polly.Joanna-Neural"
+    # Real outbound calls via Plivo Voice — inert (calls never actually
+    # dial) until all three are set, same "not configured" posture as
+    # Facebook/OpenAI elsewhere in this app. PLIVO_PHONE_NUMBER is the
+    # E.164 number ("From") Plivo dials out from — does not need to be a US
+    # number to call US recipients; only outbound international calling
+    # needs to be enabled on the Plivo account.
+    plivo_auth_id: str | None = None
+    plivo_auth_token: str | None = None
+    plivo_phone_number: str | None = None
+    # A Plivo built-in Amazon Polly voice — realistic, zero extra TTS
+    # integration needed (see services/voice_call.py). Full list:
+    # https://www.plivo.com/docs/voice/xml/speak/
+    plivo_voice: str = "Polly.Joanna"
     voice_call_poll_seconds: float = 60.0
     # Global pacing cap across every automation, mirroring bulk_email_daily_limit
     # — real phone calls cost real money per minute; this is the one knob

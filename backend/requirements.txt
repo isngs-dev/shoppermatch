@@ -20,6 +20,14 @@ openpyxl==3.1.5
 pypdf==5.1.0
 python-docx==1.1.2
 
+# AI Voice Call Follow-Up: Plivo Programmable Voice (services/voice_call.py).
+# Unlike this app's other integrations (SendGrid, OpenAI, Facebook — plain
+# httpx, no vendor SDK), Plivo's webhook signature scheme (HMAC-SHA256 over a
+# nonce + sorted params, V3) is intricate enough that hand-rolling it is a
+# real correctness risk; the official SDK's validate_v3_signature() is worth
+# the one dependency. Also used for call creation (client.calls.create).
+plivo==4.62.0
+
 # Test / verification tooling
 httpx==0.28.1
 pytest==8.3.4

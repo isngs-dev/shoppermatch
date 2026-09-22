@@ -48,12 +48,12 @@ class AutomationCreate(BaseModel):
     total_iterations: int = Field(default=1, ge=1, le=52)
     # AI Voice Call Follow-Up (step 07) — off by default; see
     # services/voice_call_scheduler.py. Inert regardless of this flag until
-    # TWILIO_ACCOUNT_SID/AUTH_TOKEN/PHONE_NUMBER are configured.
+    # PLIVO_AUTH_ID/AUTH_TOKEN/PHONE_NUMBER are configured.
     voice_call_enabled: bool = False
     voice_call_delay_days: int = Field(default=2, ge=0, le=30)
     voice_call_retry_gap_days: int = Field(default=3, ge=1, le=30)
     voice_call_max_attempts: int = Field(default=2, ge=1, le=5)
-    # Custom recorded/scripted opening line Twilio's TTS reads when the call
+    # Custom recorded/scripted opening line Plivo's TTS reads when the call
     # connects — None keeps the built-in default (services/voice_call_ai.py).
     voice_call_message: str | None = Field(default=None, max_length=1000)
 

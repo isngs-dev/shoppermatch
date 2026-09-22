@@ -3,7 +3,7 @@ poller pattern as services/automation.py, services/social_publisher.py, and
 services/social_automation.py (see main.py's lifespan). Finds shoppers whose
 email sequence is fully exhausted (ShopperAutomationStatus.COMPLETED_NO_RESPONSE)
 on an automation with voice calling enabled, and places (or retries) a real
-Twilio call for each one that's actually due.
+Plivo call for each one that's actually due.
 
 Pacing: a single global `voice_call_daily_limit` (real phone calls cost real
 money) — once that many calls have been ATTEMPTED in the trailing 24h, this
@@ -107,9 +107,9 @@ async def _place_call(session, state: ShopperAutomationState) -> None:
 
     try:
         base_url = settings.public_base_url.rstrip("/")
-        twiml_url = f"{base_url}/api/voice-calls/twiml/{state.id}"
-        status_url = f"{base_url}/api/voice-calls/status/{state.id}"
-        call_sid = await create_call(shopper.phone, twiml_url, status_url)
+        answer_url = f"{base_url}/api/voice-calls/answer/{state.id}"
+        hangup_url = f"{base_url}/api/voice-calls/status/{state.id}"
+        call_sid = await create_call(shopper.phone, answer_url, hangup_url)
         log.external_call_sid = call_sid
         log.status = "queued"
         log.transcript = [
@@ -139,7 +139,7 @@ async def _place_call(session, state: ShopperAutomationState) -> None:
 async def process_due_voice_calls() -> int:
     """One scheduler tick. Returns the number of calls actually placed."""
     if not is_configured():
-        return 0  # inert until TWILIO_* env vars are set — never even queries
+        return 0  # inert until PLIVO_* env vars are set — never even queries
 
     placed = 0
     async with AsyncSessionLocal() as session:

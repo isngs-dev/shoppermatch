@@ -4,12 +4,12 @@ tool-calling architecture as services/voice_assistant.py's browser voice
 assistant (one small structured "conclude" tool the model calls once it has
 a real answer, otherwise it just replies with the next thing to say).
 
-Turn-based, not full-duplex: Twilio's <Gather input="speech"> transcribes
+Turn-based, not full-duplex: Plivo's <GetInput inputType="speech"> transcribes
 each shopper utterance and POSTs it to us (routers/voice_calls.py), we ask
-GPT for the next line + optionally an outcome, and respond with new TwiML.
+GPT for the next line + optionally an outcome, and respond with new PLXML.
 This reads as a natural back-and-forth conversation to the shopper even
 though there's no persistent audio stream — the same request/response shape
-Twilio's own docs use for building voice IVRs.
+Plivo's own docs use for building voice IVRs.
 """
 from __future__ import annotations
 

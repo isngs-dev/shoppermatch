@@ -1,8 +1,8 @@
 """AI Voice Call Follow-Up webhooks — /api/voice-calls/*.
 
-Public routes Twilio itself calls (no bearer auth possible — Twilio is an
-external server, not a logged-in browser), verified instead via Twilio's own
-request-signature scheme (services/voice_call.py::verify_twilio_signature),
+Public routes Plivo itself calls (no bearer auth possible — Plivo is an
+external server, not a logged-in browser), verified instead via Plivo's own
+V3 request-signature scheme (services/voice_call.py::verify_plivo_signature),
 same "public but signature-verified" posture as routers/webhooks.py's
 SendGrid endpoint.
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -30,7 +30,7 @@ from ..serializers import iso
 from ..services.audit import record_audit
 from ..services.tenancy import enforce_campaign_access
 from ..services.tracking import now
-from ..services.voice_call import create_call, twiml_say_gather, verify_twilio_signature
+from ..services.voice_call import create_call, plxml_say_gather, verify_plivo_signature
 from ..services.voice_call_ai import next_turn, opening_line
 
 router = APIRouter(prefix="/api/voice-calls", tags=["AI Voice Call Follow-Up"])
@@ -41,9 +41,10 @@ _E164 = re.compile(r"^\+[1-9]\d{6,14}$")
 async def _verify_request(request: Request) -> dict:
     form = await request.form()
     params = dict(form)
-    signature = request.headers.get("x-twilio-signature")
-    if not verify_twilio_signature(str(request.url), params, signature):
-        raise HTTPException(status_code=401, detail="Invalid Twilio webhook signature")
+    signature = request.headers.get("x-plivo-signature-v3")
+    nonce = request.headers.get("x-plivo-signature-v3-nonce")
+    if not verify_plivo_signature("POST", str(request.url), nonce, signature, params):
+        raise HTTPException(status_code=401, detail="Invalid Plivo webhook signature")
     return params
 
 
@@ -65,7 +66,7 @@ def _xml(body: str) -> Response:
 # Ad-hoc test call — admin-triggered, NOT tied to a shopper/automation record.
 # Same "manually verify the integration actually works" purpose as
 # routers/integrations.py's POST /email/test-send; places one real outbound
-# Twilio call that speaks a message once and hangs up (no AI conversation —
+# Plivo call that speaks a message once and hangs up (no AI conversation —
 # this checks connectivity/audio, not the GPT turn-taking).
 # --------------------------------------------------------------------------- #
 class TestCallRequest(BaseModel):
@@ -98,9 +99,9 @@ async def send_test_call(
     greeting = opening_line("there", "this opportunity", "", message)
 
     base = settings.public_base_url.rstrip("/")
-    twiml_url = f"{base}/api/voice-calls/test-twiml?message={quote(greeting)}"
-    status_url = f"{base}/api/voice-calls/test-status"
-    call_sid = await create_call(to_number, twiml_url, status_url)
+    answer_url = f"{base}/api/voice-calls/test-answer?message={quote(greeting)}"
+    hangup_url = f"{base}/api/voice-calls/test-status"
+    call_sid = await create_call(to_number, answer_url, hangup_url)
 
     await record_audit(
         session,
@@ -115,28 +116,28 @@ async def send_test_call(
     return {"call_sid": call_sid, "to_number": to_number, "message": greeting}
 
 
-@router.post("/test-twiml", include_in_schema=False)
+@router.post("/test-answer", include_in_schema=False)
 async def test_call_connected(request: Request):
-    """Twilio fetches this the instant a test call (POST /test-call) connects."""
+    """Plivo fetches this the instant a test call (POST /test-call) connects."""
     await _verify_request(request)
     message = request.query_params.get("message") or "This is a test call from ShopperMatch A I. Thanks, goodbye."
-    return _xml(twiml_say_gather(message, "", hang_up_after=True))
+    return _xml(plxml_say_gather(message, "", hang_up_after=True))
 
 
 @router.post("/test-status", include_in_schema=False)
 async def test_call_status(request: Request):
-    """Twilio's status callback for a test call — nothing to persist, just
-    needs to exist and return 2xx so Twilio doesn't retry/alert."""
+    """Plivo's hangup callback for a test call — nothing to persist, just
+    needs to exist and return 2xx so Plivo doesn't retry/alert."""
     await _verify_request(request)
     return Response(status_code=204)
 
 
 # --------------------------------------------------------------------------- #
-# Twilio webhooks (public, signature-verified)
+# Plivo webhooks (public, signature-verified)
 # --------------------------------------------------------------------------- #
-@router.post("/twiml/{state_id}", include_in_schema=False)
+@router.post("/answer/{state_id}", include_in_schema=False)
 async def call_connected(state_id: uuid.UUID, request: Request, session: AsyncSession = Depends(get_session)):
-    """Twilio fetches this the instant the call connects — the opening line."""
+    """Plivo fetches this the instant the call connects — the opening line."""
     await _verify_request(request)
     stmt = (
         select(ShopperAutomationState)
@@ -159,14 +160,14 @@ async def call_connected(state_id: uuid.UUID, request: Request, session: AsyncSe
         state.automation.voice_call_message,
     )
     gather_url = f"{request.url.scheme}://{request.url.netloc}/api/voice-calls/gather/{state_id}"
-    return _xml(twiml_say_gather(greeting, gather_url))
+    return _xml(plxml_say_gather(greeting, gather_url))
 
 
 @router.post("/gather/{state_id}", include_in_schema=False)
 async def call_gather(state_id: uuid.UUID, request: Request, session: AsyncSession = Depends(get_session)):
-    """Twilio POSTs here after each <Gather> completes, with SpeechResult
-    holding what it transcribed. One GPT turn, then either another Gather or
-    a Hangup once conclude_call fires."""
+    """Plivo POSTs here after each <GetInput> completes, with Speech holding
+    what it transcribed. One GPT turn, then either another GetInput or a
+    Hangup once conclude_call fires."""
     params = await _verify_request(request)
     stmt = (
         select(ShopperAutomationState)
@@ -183,7 +184,7 @@ async def call_gather(state_id: uuid.UUID, request: Request, session: AsyncSessi
         return _xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>')
 
     log = await _latest_call_log(session, state_id)
-    speech = (params.get("SpeechResult") or "").strip()
+    speech = (params.get("Speech") or "").strip()
     shop = state.shop or state.automation.shop
     campaign = state.automation.campaign
 
@@ -214,21 +215,30 @@ async def call_gather(state_id: uuid.UUID, request: Request, session: AsyncSessi
             log.outcome = turn["outcome"]
             log.ended_at = now()
         await session.commit()
-        return _xml(twiml_say_gather(turn["say"], "", hang_up_after=True))
+        return _xml(plxml_say_gather(turn["say"], "", hang_up_after=True))
 
     await session.commit()
     gather_url = f"{request.url.scheme}://{request.url.netloc}/api/voice-calls/gather/{state_id}"
-    return _xml(twiml_say_gather(turn["say"], gather_url))
+    return _xml(plxml_say_gather(turn["say"], gather_url))
 
 
 @router.post("/status/{state_id}", include_in_schema=False)
 async def call_status(state_id: uuid.UUID, request: Request, session: AsyncSession = Depends(get_session)):
-    """Twilio's call-completed status callback — the only reliable signal
-    for calls that never connected at all (no-answer/busy/failed), which
-    /gather never sees since no <Gather> ever ran."""
+    """Plivo's hangup_url callback — the only reliable signal for calls that
+    never connected at all (no-answer/busy/failed), which /gather never sees
+    since no <GetInput> ever ran."""
     params = await _verify_request(request)
     call_status_value = params.get("CallStatus", "")
-    duration = params.get("CallDuration")
+    # Plivo's hangup callback gives AnswerTime/EndTime timestamps rather than
+    # a ready-made duration figure — compute it from those when both are
+    # present; best-effort only, this is a reporting figure, not core logic.
+    duration: int | None = None
+    answer_time, end_time = params.get("AnswerTime"), params.get("EndTime")
+    if answer_time and end_time:
+        try:
+            duration = int((datetime.fromisoformat(end_time) - datetime.fromisoformat(answer_time)).total_seconds())
+        except ValueError:
+            duration = None
 
     stmt = (
         select(ShopperAutomationState)
@@ -243,11 +253,8 @@ async def call_status(state_id: uuid.UUID, request: Request, session: AsyncSessi
     if log:
         log.status = call_status_value or log.status
         log.ended_at = now()
-        if duration:
-            try:
-                log.duration_seconds = int(duration)
-            except ValueError:
-                pass
+        if duration is not None:
+            log.duration_seconds = duration
 
     # Only overwrite state if the conversation itself hasn't already
     # concluded (voice_call_status == "completed", set in /gather) — a
