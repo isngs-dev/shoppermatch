@@ -687,6 +687,23 @@ class BulkCallTarget(Base):
 
 
 # --------------------------------------------------------------------------- #
+# Call Contacts — a saved, reusable list of raw phone numbers (e.g. a SASSIE
+# export) a client can pick from with a checklist instead of re-pasting the
+# same numbers into every Bulk Voice Call. Deliberately its own lightweight
+# table rather than Shopper rows — these numbers often have no name/email/
+# campaign behind them yet, just a phone number.
+# --------------------------------------------------------------------------- #
+class CallContact(Base):
+    __tablename__ = "call_contacts"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    phone_number: Mapped[str] = mapped_column(String(20), unique=True)
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(30), default="manual")  # manual|sassie
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# --------------------------------------------------------------------------- #
 # Password reset tokens (forgot/reset password flow). Deliberately a
 # separate table rather than columns on User — a token is short-lived,
 # single-use, and irrelevant to the user's steady-state row.

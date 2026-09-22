@@ -377,6 +377,10 @@ export const api = {
     request("/api/voice-calls/bulk", { method: "POST", body: { numbers, message, automation_id: automationId || null } }),
   bulkCallBatches: (automationId?: string) => request("/api/voice-calls/bulk" + qs({ automation_id: automationId })),
   bulkCallBatch: (id: string) => request(`/api/voice-calls/bulk/${id}`),
+  callContacts: () => request("/api/voice-calls/contacts"),
+  addCallContacts: (numbers: string[], label?: string | null) =>
+    request("/api/voice-calls/contacts", { method: "POST", body: { numbers, label: label || null } }),
+  deleteCallContact: (id: string) => request(`/api/voice-calls/contacts/${id}`, { method: "DELETE" }),
   addAutomationShoppers: (id: string, shopperIds: string[], shopIds?: string[]) =>
     request(`/api/automations/${id}/shoppers`, {
       method: "POST",

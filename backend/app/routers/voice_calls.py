@@ -26,7 +26,7 @@ from sqlalchemy.orm import selectinload
 from ..config import settings
 from ..database import get_session
 from ..deps import require_operator
-from ..models import BulkCallBatch, BulkCallTarget, EmailAutomation, ShopperAutomationState, User, VoiceCallLog
+from ..models import BulkCallBatch, BulkCallTarget, CallContact, EmailAutomation, ShopperAutomationState, User, VoiceCallLog
 from ..serializers import iso
 from ..services.audit import record_audit
 from ..services.bulk_voice_call import MAX_BULK_CALL_TARGETS, run_bulk_call_batch
@@ -608,3 +608,64 @@ async def get_bulk_call_batch(
     if batch is None:
         raise HTTPException(status_code=404, detail="Batch not found")
     return _bulk_batch_out(batch)
+
+
+# --------------------------------------------------------------------------- #
+# Call Contacts — a saved, reusable checklist of raw numbers (e.g. a SASSIE
+# export) so a Bulk Voice Call doesn't need every number re-pasted by hand
+# each time.
+# --------------------------------------------------------------------------- #
+def _contact_out(c: CallContact) -> dict:
+    return {"id": str(c.id), "phone_number": c.phone_number, "label": c.label, "source": c.source, "created_at": iso(c.created_at)}
+
+
+@router.get("/contacts")
+async def list_call_contacts(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    stmt = select(CallContact).order_by(CallContact.created_at.desc())
+    contacts = (await session.execute(stmt)).scalars().all()
+    return {"items": [_contact_out(c) for c in contacts]}
+
+
+class CallContactsCreate(BaseModel):
+    numbers: list[str] = Field(min_length=1, max_length=500)
+    label: str | None = Field(default=None, max_length=255)
+    source: str = Field(default="manual", max_length=30)
+
+
+@router.post("/contacts")
+async def add_call_contacts(
+    body: CallContactsCreate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    existing = {c for c in (await session.execute(select(CallContact.phone_number))).scalars().all()}
+    added: list[CallContact] = []
+    for raw in body.numbers:
+        n = re.sub(r"[\s\-().]", "", raw)
+        if n and not n.startswith("+"):
+            n = "+" + n
+        if not _E164.match(n) or n in existing:
+            continue
+        c = CallContact(phone_number=n, label=body.label, source=body.source)
+        session.add(c)
+        added.append(c)
+        existing.add(n)
+    await session.commit()
+    return {"added": len(added), "items": [_contact_out(c) for c in added]}
+
+
+@router.delete("/contacts/{contact_id}")
+async def delete_call_contact(
+    contact_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    contact = await session.get(CallContact, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    await session.delete(contact)
+    await session.commit()
+    return {"deleted": True}

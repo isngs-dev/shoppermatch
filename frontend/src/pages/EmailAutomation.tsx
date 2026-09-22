@@ -636,6 +636,77 @@ function AutomationBuilder({
   );
 }
 
+// --------------------------------------------------------------------------- //
+// Saved Numbers checklist — a reusable list of Call Contacts (e.g. a SASSIE
+// export) with Select all/Deselect all, so a Bulk Voice Call doesn't need
+// every number re-typed by hand. Purely an inserter: checking boxes here
+// never sends anything itself — "Insert selected" appends the checked
+// numbers into whatever textarea the caller owns, deduped.
+// --------------------------------------------------------------------------- //
+function SavedNumbersChecklist({ onInsert }: { onInsert: (numbers: string[]) => void }) {
+  const { data, loading } = useApi(() => api.callContacts());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const contacts = data?.items || [];
+
+  function toggle(n: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(n)) next.delete(n);
+      else next.add(n);
+      return next;
+    });
+  }
+
+  if (loading && !data) return <p className="text-xs text-slate-400">Loading saved numbers…</p>;
+  if (contacts.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+          Saved numbers ({contacts.length}) — {selected.size} selected
+        </span>
+        <div className="flex gap-2 text-[11px]">
+          <button
+            type="button"
+            className="font-semibold text-brand-600 hover:underline dark:text-brand-400"
+            onClick={() => setSelected(new Set(contacts.map((c: any) => c.phone_number)))}
+          >
+            Select all
+          </button>
+          <button
+            type="button"
+            className="font-semibold text-slate-400 hover:underline"
+            onClick={() => setSelected(new Set())}
+          >
+            Deselect all
+          </button>
+        </div>
+      </div>
+      <div className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+        {contacts.map((c: any) => (
+          <label
+            key={c.id}
+            className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-xs hover:bg-slate-50 dark:hover:bg-slate-800/50"
+          >
+            <input type="checkbox" checked={selected.has(c.phone_number)} onChange={() => toggle(c.phone_number)} />
+            <span className="min-w-0 flex-1 truncate font-mono text-slate-700 dark:text-slate-200">{c.phone_number}</span>
+            {c.label && <span className="shrink-0 text-slate-400">{c.label}</span>}
+          </label>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="btn-secondary mt-2 h-8 w-full text-xs"
+        disabled={selected.size === 0}
+        onClick={() => onInsert(Array.from(selected))}
+      >
+        Insert selected ({selected.size})
+      </button>
+    </div>
+  );
+}
+
 // ------------------------------ Detail / Dashboard ------------------------------ //
 // Its own routed page (/client/email-automation/automations/:id) rather than a modal
 // over the Email Automation list — each automation gets a real URL you can
@@ -915,6 +986,14 @@ export function AutomationDetailPage() {
               Each number gets the full AI conversation (listens and responds), one after another, using this
               automation's opening message above.
             </p>
+            <div className="mb-2">
+              <SavedNumbersChecklist
+                onInsert={(numbers) => {
+                  const merged = new Set([...bulkNumbers, ...numbers]);
+                  setBulkNumbersText(Array.from(merged).join("\n"));
+                }}
+              />
+            </div>
             <textarea
               className="input h-24 resize-none font-mono text-xs"
               placeholder={"+918691969772\n+919890068591\n+919653491090"}
@@ -1253,6 +1332,14 @@ export function BulkVoiceCallPanel() {
               value={numbersText}
               onChange={(e) => setNumbersText(e.target.value)}
             />
+            <div className="mt-2">
+              <SavedNumbersChecklist
+                onInsert={(picked) => {
+                  const merged = new Set([...numbers, ...picked]);
+                  setNumbersText(Array.from(merged).join("\n"));
+                }}
+              />
+            </div>
           </div>
           <div>
             <label className="label">Opening script (optional — leave blank for the default)</label>
