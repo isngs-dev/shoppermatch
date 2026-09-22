@@ -22,17 +22,18 @@ import { useSearchParams } from "react-router-dom";
 import { InvitationDrawer } from "../../components/InvitationDrawer";
 import { Badge, CheckCell, Loading } from "../../components/ui";
 import { api } from "../../lib/api";
-import { classNames, statusBadgeClass } from "../../lib/format";
+import { classNames, fmtDateTime, statusBadgeClass } from "../../lib/format";
 import { useApi } from "../../lib/useApi";
 import { BulkSendStatusCard } from "../Outreach";
-import { BulkVoiceCallPanel, EmailAutomationPanel } from "../EmailAutomation";
+import { BulkVoiceCallPanel, EmailAutomationPanel, VOICE_CALL_BADGE } from "../EmailAutomation";
 import { EmailTemplatesPanel } from "../EmailTemplates";
 import { ErrorBox } from "../Dashboard";
 
 const TABS = [
   { key: "automations", label: "Automations" },
   { key: "bulk-call", label: "Bulk Voice Call" },
-  { key: "tracking", label: "Tracking" },
+  { key: "tracking", label: "Email Tracking" },
+  { key: "call-tracking", label: "Call Tracking" },
   { key: "templates", label: "Templates" },
 ] as const;
 
@@ -72,6 +73,8 @@ export function ClientEmailAutomation() {
         </div>
       ) : activeTab === "tracking" ? (
         <AutomationTrackingTab />
+      ) : activeTab === "call-tracking" ? (
+        <CallTrackingTab />
       ) : activeTab === "bulk-call" ? (
         <BulkVoiceCallPanel />
       ) : (
@@ -166,6 +169,142 @@ function AutomationTrackingTab() {
         </table>
       </div>
       {selected && <InvitationDrawer invitationId={selected} onClose={() => setSelected(null)} />}
+    </>
+  );
+}
+
+// Every real call this client has placed — a named shopper's Real AI Call /
+// scheduled follow-up AND an ad-hoc Bulk Voice Call number, merged into one
+// chronological list (each row tagged "Automation" or "Bulk" so the source
+// is never ambiguous) — deliberately its own tab, separate from Email
+// Tracking above, since a phone conversation and an email open/click are
+// different channels with different outcomes to review.
+function CallTrackingTab() {
+  const { data, loading, error, reload } = useApi(() => api.callTracking());
+  const [selected, setSelected] = useState<any | null>(null);
+  if (loading && !data) return <Loading label="Loading call tracking…" />;
+  if (error) return <ErrorBox message={error} onRetry={reload} />;
+
+  const items = data?.items || [];
+
+  return (
+    <>
+      <div className="card overflow-x-auto">
+        <div className="flex items-center justify-between border-b border-slate-100 p-4 dark:border-slate-800">
+          <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+            Voice calls
+            <span className="ml-2 text-xs font-normal text-slate-400">{items.length}</span>
+          </h2>
+          <button className="btn-secondary h-8 px-2.5 text-xs" onClick={reload}>
+            Refresh
+          </button>
+        </div>
+        <table className="min-w-full text-sm">
+          <thead className="border-b border-slate-100 dark:border-slate-800">
+            <tr>
+              <th className="th">Shopper / Number</th>
+              <th className="th hidden lg:table-cell">Campaign</th>
+              <th className="th">Source</th>
+              <th className="th">Status</th>
+              <th className="th">Outcome</th>
+              <th className="th hidden md:table-cell">When</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
+            {items.map((r: any) => (
+              <tr
+                key={r.id}
+                className="cursor-pointer transition-colors hover:bg-brand-50/70 dark:hover:bg-brand-950/30"
+                onClick={() => setSelected(r)}
+              >
+                <td className="td font-medium text-slate-800 dark:text-slate-100">
+                  {r.shopper_name || <span className="font-mono font-normal">{r.phone_number}</span>}
+                  {r.shopper_name && (
+                    <div className="text-[11px] font-normal text-slate-400">{r.phone_number}</div>
+                  )}
+                </td>
+                <td className="td hidden text-slate-500 lg:table-cell">{r.campaign_name || "—"}</td>
+                <td className="td">
+                  <span
+                    className={classNames(
+                      "badge",
+                      r.kind === "automation"
+                        ? "bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300"
+                        : "bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+                    )}
+                  >
+                    {r.kind === "automation" ? "Automation" : "Bulk"}
+                  </span>
+                </td>
+                <td className="td">
+                  <Badge className={VOICE_CALL_BADGE[(r.status || "").replace("-", "_")] || VOICE_CALL_BADGE.default}>
+                    {cap((r.status || "—").replace(/[-_]/g, " "))}
+                  </Badge>
+                </td>
+                <td className="td text-slate-500">{r.outcome ? cap(r.outcome.replace("_", " ")) : "—"}</td>
+                <td className="td hidden text-slate-500 md:table-cell">{r.attempted_at ? fmtDateTime(r.attempted_at) : "—"}</td>
+              </tr>
+            ))}
+            {items.length === 0 && (
+              <tr>
+                <td colSpan={6} className="td py-10 text-center text-slate-400">
+                  No calls placed yet — try "Real AI Call" on a shopper, or start a Bulk Voice Call.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {selected && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setSelected(null)} />
+          <div className="relative max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-5 shadow-2xl dark:bg-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  {selected.shopper_name || selected.phone_number}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  {selected.phone_number}
+                  {selected.campaign_name ? ` · ${selected.campaign_name}` : ""}
+                </p>
+              </div>
+              <button className="btn-ghost" onClick={() => setSelected(null)} aria-label="Close">✕</button>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <Badge className={VOICE_CALL_BADGE[(selected.status || "").replace("-", "_")] || VOICE_CALL_BADGE.default}>
+                {cap((selected.status || "—").replace(/[-_]/g, " "))}
+              </Badge>
+              {selected.attempted_at && <span>{fmtDateTime(selected.attempted_at)}</span>}
+              {selected.duration_seconds != null && <span>{selected.duration_seconds}s</span>}
+            </div>
+            {selected.error_message && (
+              <p className="mt-2 text-xs font-medium text-rose-600 dark:text-rose-400">{selected.error_message}</p>
+            )}
+            {selected.transcript?.length > 0 ? (
+              <div className="mt-3 space-y-1.5">
+                {selected.transcript.map((turn: any, i: number) => (
+                  <div
+                    key={i}
+                    className={classNames(
+                      "text-xs",
+                      turn.role === "assistant" ? "text-slate-700 dark:text-slate-200" : "text-brand-600 dark:text-brand-400"
+                    )}
+                  >
+                    <span className="font-semibold">{turn.role === "assistant" ? "AI: " : "Caller: "}</span>
+                    {turn.text}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-xs text-slate-400">No transcript yet.</p>
+            )}
+            <div className="mt-3 border-t border-slate-200 pt-3 text-right dark:border-slate-800">
+              <button className="btn-secondary" onClick={() => setSelected(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

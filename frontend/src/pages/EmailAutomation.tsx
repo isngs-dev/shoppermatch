@@ -26,7 +26,7 @@ const STATE_BADGE: Record<string, string> = {
   completed_failed: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
 };
 
-const VOICE_CALL_BADGE: Record<string, string> = {
+export const VOICE_CALL_BADGE: Record<string, string> = {
   interested: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
   not_interested: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
   undecided: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",

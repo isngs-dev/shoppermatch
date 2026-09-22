@@ -381,6 +381,7 @@ export const api = {
   addCallContacts: (numbers: string[], label?: string | null) =>
     request("/api/voice-calls/contacts", { method: "POST", body: { numbers, label: label || null } }),
   deleteCallContact: (id: string) => request(`/api/voice-calls/contacts/${id}`, { method: "DELETE" }),
+  callTracking: () => request("/api/voice-calls/tracking"),
   addAutomationShoppers: (id: string, shopperIds: string[], shopIds?: string[]) =>
     request(`/api/automations/${id}/shoppers`, {
       method: "POST",

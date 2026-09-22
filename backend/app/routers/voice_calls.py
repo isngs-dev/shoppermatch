@@ -26,7 +26,16 @@ from sqlalchemy.orm import selectinload
 from ..config import settings
 from ..database import get_session
 from ..deps import require_operator
-from ..models import BulkCallBatch, BulkCallTarget, CallContact, EmailAutomation, ShopperAutomationState, User, VoiceCallLog
+from ..models import (
+    BulkCallBatch,
+    BulkCallTarget,
+    Campaign,
+    CallContact,
+    EmailAutomation,
+    ShopperAutomationState,
+    User,
+    VoiceCallLog,
+)
 from ..serializers import iso
 from ..services.audit import record_audit
 from ..services.bulk_voice_call import MAX_BULK_CALL_TARGETS, run_bulk_call_batch
@@ -669,3 +678,94 @@ async def delete_call_contact(
     await session.delete(contact)
     await session.commit()
     return {"deleted": True}
+
+
+# --------------------------------------------------------------------------- #
+# Call Tracking — every real call this client's account has placed, across
+# BOTH sources (a named shopper's Real AI Call / scheduled follow-up, and an
+# ad-hoc Bulk Voice Call number), in one chronological list. Deliberately
+# separate from the Email Tracking tab (routers/invitations.py's
+# automation_only=True) — a call and an email are different channels with
+# different outcomes, and conflating them into one table was the actual
+# complaint this endpoint exists to fix.
+# --------------------------------------------------------------------------- #
+@router.get("/tracking")
+async def call_tracking(
+    limit: int = 200,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    # ---- Named-shopper calls (Real AI Call + scheduled follow-up) ---- #
+    log_stmt = (
+        select(VoiceCallLog)
+        .join(ShopperAutomationState, VoiceCallLog.automation_state_id == ShopperAutomationState.id)
+        .join(EmailAutomation, ShopperAutomationState.automation_id == EmailAutomation.id)
+        .join(Campaign, EmailAutomation.campaign_id == Campaign.id)
+        .order_by(VoiceCallLog.attempted_at.desc())
+        .limit(limit)
+        .options(
+            selectinload(VoiceCallLog.automation_state).selectinload(ShopperAutomationState.shopper),
+            selectinload(VoiceCallLog.automation_state).selectinload(ShopperAutomationState.automation).selectinload(EmailAutomation.campaign),
+        )
+    )
+    if user.role == "client":
+        log_stmt = log_stmt.where(Campaign.client_id == user.client_id)
+    logs = (await session.execute(log_stmt)).scalars().all()
+
+    named = [
+        {
+            "id": str(l.id),
+            "kind": "automation",
+            "shopper_name": l.automation_state.shopper.name if l.automation_state and l.automation_state.shopper else None,
+            "phone_number": l.automation_state.shopper.phone if l.automation_state and l.automation_state.shopper else None,
+            "campaign_name": l.automation_state.automation.campaign.name if l.automation_state and l.automation_state.automation and l.automation_state.automation.campaign else None,
+            "automation_name": l.automation_state.automation.name if l.automation_state and l.automation_state.automation else None,
+            "automation_id": str(l.automation_state.automation_id) if l.automation_state else None,
+            "status": l.status,
+            "outcome": l.outcome,
+            "attempted_at": iso(l.attempted_at),
+            "ended_at": iso(l.ended_at),
+            "duration_seconds": l.duration_seconds,
+            "transcript": l.transcript or [],
+            "error_message": l.error_message,
+        }
+        for l in logs
+    ]
+
+    # ---- Ad-hoc Bulk Voice Call numbers ---- #
+    target_stmt = (
+        select(BulkCallTarget)
+        .join(BulkCallBatch, BulkCallTarget.batch_id == BulkCallBatch.id)
+        .where(BulkCallTarget.status != "queued")  # not yet attempted — nothing to show
+        .order_by(BulkCallTarget.created_at.desc())
+        .limit(limit)
+        .options(selectinload(BulkCallTarget.batch))
+    )
+    if user.role == "client":
+        # Bulk batches aren't campaign-scoped — a client only sees the ones
+        # they personally started.
+        target_stmt = target_stmt.where(BulkCallBatch.created_by == user.email)
+    targets = (await session.execute(target_stmt)).scalars().all()
+
+    bulk = [
+        {
+            "id": str(t.id),
+            "kind": "bulk",
+            "shopper_name": None,
+            "phone_number": t.phone_number,
+            "campaign_name": None,
+            "automation_name": None,
+            "automation_id": str(t.batch.automation_id) if t.batch and t.batch.automation_id else None,
+            "status": t.status,
+            "outcome": t.outcome,
+            "attempted_at": iso(t.attempted_at),
+            "ended_at": iso(t.ended_at),
+            "duration_seconds": None,
+            "transcript": t.transcript or [],
+            "error_message": t.error_message,
+        }
+        for t in targets
+    ]
+
+    items = sorted(named + bulk, key=lambda x: x["attempted_at"] or "", reverse=True)[:limit]
+    return {"items": items}
