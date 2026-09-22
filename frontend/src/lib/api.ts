@@ -373,6 +373,10 @@ export const api = {
     request("/api/voice-calls/test-call", { method: "POST", body }),
   sendRealTestVoiceCall: (stateId: string) =>
     request(`/api/voice-calls/real-test-call/${stateId}`, { method: "POST" }),
+  createBulkCallBatch: (numbers: string[], message: string | null) =>
+    request("/api/voice-calls/bulk", { method: "POST", body: { numbers, message } }),
+  bulkCallBatches: () => request("/api/voice-calls/bulk"),
+  bulkCallBatch: (id: string) => request(`/api/voice-calls/bulk/${id}`),
   addAutomationShoppers: (id: string, shopperIds: string[], shopIds?: string[]) =>
     request(`/api/automations/${id}/shoppers`, {
       method: "POST",

@@ -638,6 +638,48 @@ class VoiceCallLog(Base):
 
 
 # --------------------------------------------------------------------------- #
+# Bulk Voice Call — an ad-hoc batch of up to 100 raw phone numbers (e.g. a
+# SASSIE export) called one after another through the single configured
+# Plivo number, each getting the same full listen-then-GPT-responds
+# conversation as a single shopper's Real AI Call. Deliberately independent
+# of ShopperAutomationState/EmailAutomation — these numbers aren't
+# necessarily existing Shopper rows or tied to one campaign's sequence.
+# --------------------------------------------------------------------------- #
+class BulkCallBatch(Base):
+    __tablename__ = "bulk_call_batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    created_by: Mapped[str] = mapped_column(String(255))
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    total_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="running")  # running|completed
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    targets: Mapped[list["BulkCallTarget"]] = relationship(
+        back_populates="batch", cascade="all, delete-orphan", order_by="BulkCallTarget.created_at"
+    )
+
+
+class BulkCallTarget(Base):
+    __tablename__ = "bulk_call_targets"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    batch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bulk_call_batches.id", ondelete="CASCADE"), index=True)
+    phone_number: Mapped[str] = mapped_column(String(20))
+    # queued | calling | completed | failed | no-answer
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)  # interested|not_interested|undecided|voicemail
+    external_call_sid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    transcript: Mapped[list] = mapped_column(json_col(), default=list)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    batch: Mapped["BulkCallBatch"] = relationship(back_populates="targets")
+
+
+# --------------------------------------------------------------------------- #
 # Password reset tokens (forgot/reset password flow). Deliberately a
 # separate table rather than columns on User — a token is short-lived,
 # single-use, and irrelevant to the user's steady-state row.

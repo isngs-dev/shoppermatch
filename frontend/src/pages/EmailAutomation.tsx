@@ -1061,3 +1061,221 @@ function VoiceCallTranscriptModal({
     </div>
   );
 }
+
+// --------------------------------------------------------------------------- //
+// Bulk Voice Call — call up to 100 raw phone numbers (e.g. a SASSIE export,
+// pasted one per line) through the single configured Plivo number, each
+// getting the full listen-then-GPT-responds conversation, one after
+// another. Independent of any one campaign/automation — see
+// services/bulk_voice_call.py + routers/voice_calls.py's /bulk* endpoints.
+// --------------------------------------------------------------------------- //
+const MAX_BULK_NUMBERS = 100;
+
+export function BulkVoiceCallPanel() {
+  const toast = useToast();
+  const [numbersText, setNumbersText] = useState("");
+  const [message, setMessage] = useState("");
+  const [starting, setStarting] = useState(false);
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
+  const [transcriptFor, setTranscriptFor] = useState<{ number: string; transcript: any[]; status: string } | null>(null);
+
+  const { data: history, reload: reloadHistory } = useApi(() => api.bulkCallBatches());
+  const { data: batch, reload: reloadBatch } = useApi(
+    () => (activeBatchId ? api.bulkCallBatch(activeBatchId) : Promise.resolve(null)),
+    [activeBatchId]
+  );
+
+  // Poll the active batch while it's still running.
+  useEffect(() => {
+    if (!activeBatchId || batch?.status === "completed") return;
+    const id = window.setInterval(reloadBatch, 3000);
+    return () => window.clearInterval(id);
+  }, [activeBatchId, batch?.status, reloadBatch]);
+
+  const numbers = useMemo(
+    () =>
+      numbersText
+        .split(/[\n,]/)
+        .map((n) => n.trim())
+        .filter(Boolean),
+    [numbersText]
+  );
+  const overLimit = numbers.length > MAX_BULK_NUMBERS;
+
+  async function start() {
+    if (numbers.length === 0) {
+      toast("Paste at least one phone number.", "error");
+      return;
+    }
+    if (overLimit) {
+      toast(`Max ${MAX_BULK_NUMBERS} numbers per batch — you pasted ${numbers.length}.`, "error");
+      return;
+    }
+    setStarting(true);
+    try {
+      const res = await api.createBulkCallBatch(numbers, message.trim() || null);
+      toast(`Bulk call batch started — ${numbers.length} number(s), calling one at a time.`, "success");
+      setActiveBatchId(res.id);
+      reloadHistory();
+    } catch (e: any) {
+      toast(e?.message || "Failed to start the bulk call batch", "error");
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  const displayBatch = batch || (history?.items || []).find((b: any) => b.id === activeBatchId);
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-5">
+        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">📞 Bulk Voice Call</h2>
+        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          Paste up to {MAX_BULK_NUMBERS} phone numbers (one per line, or comma-separated) — each one gets called
+          through the single configured Plivo number, one at a time, with the full AI conversation (listens and
+          responds, same as a single shopper's Real AI Call).
+        </p>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="label">
+              Phone numbers (E.164, e.g. +918691969772) — {numbers.length}
+              {overLimit && <span className="text-rose-500"> / max {MAX_BULK_NUMBERS}</span>}
+            </label>
+            <textarea
+              className={classNames("input h-40 resize-none font-mono text-xs", overLimit && "border-rose-400")}
+              placeholder={"+918691969772\n+919890068591\n+919653491090"}
+              value={numbersText}
+              onChange={(e) => setNumbersText(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Opening script (optional — leave blank for the default)</label>
+            <textarea
+              className="input h-40 resize-none"
+              placeholder="Hi {first_name}, this is Nike calling about a mystery shopping opportunity..."
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              maxLength={1000}
+            />
+          </div>
+        </div>
+
+        <button className="btn-primary mt-4 h-9" onClick={start} disabled={starting || numbers.length === 0 || overLimit}>
+          {starting ? <Spinner /> : null} Start Bulk Call ({numbers.length})
+        </button>
+      </div>
+
+      {displayBatch && (
+        <div className="card p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+              Batch {fmtDateTime(displayBatch.created_at)}
+            </h3>
+            <Badge className={displayBatch.status === "completed" ? STATUS_BADGE.completed : VOICE_CALL_BADGE.calling}>
+              {displayBatch.status === "completed" ? "Completed" : "Running"}
+            </Badge>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <KpiCard label="Total" value={displayBatch.total_count} accent="brand" />
+            <KpiCard label="Placed" value={displayBatch.placed ?? 0} accent="indigo" />
+            <KpiCard label="Completed" value={displayBatch.completed ?? 0} accent="emerald" />
+            <KpiCard label="Failed" value={displayBatch.failed ?? 0} accent="rose" />
+          </div>
+          <div className="mt-4 max-h-72 overflow-y-auto rounded-lg border border-slate-100 dark:border-slate-800">
+            <table className="min-w-full text-sm">
+              <thead className="border-b border-slate-100 dark:border-slate-800">
+                <tr>
+                  <th className="th">Number</th>
+                  <th className="th">Status</th>
+                  <th className="th">Outcome</th>
+                  <th className="th">Preview</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
+                {(displayBatch.targets || []).map((t: any) => (
+                  <tr key={t.id}>
+                    <td className="td font-mono text-xs">{t.phone_number}</td>
+                    <td className="td">
+                      <Badge className={VOICE_CALL_BADGE[t.status.replace("-", "_")] || VOICE_CALL_BADGE.default}>
+                        {cap(t.status.replace(/[-_]/g, " "))}
+                      </Badge>
+                    </td>
+                    <td className="td text-slate-500">{t.outcome ? cap(t.outcome.replace("_", " ")) : "—"}</td>
+                    <td className="td">
+                      {t.transcript?.length > 0 ? (
+                        <button
+                          className="text-xs font-semibold text-brand-600 hover:underline dark:text-brand-400"
+                          onClick={() => setTranscriptFor({ number: t.phone_number, transcript: t.transcript, status: t.status })}
+                        >
+                          View
+                        </button>
+                      ) : (
+                        <span className="text-slate-300 dark:text-slate-600">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {history?.items?.length > 0 && (
+        <div className="card p-5">
+          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Recent batches</h3>
+          <div className="mt-3 space-y-1.5">
+            {history.items.map((b: any) => (
+              <button
+                key={b.id}
+                onClick={() => setActiveBatchId(b.id)}
+                className={classNames(
+                  "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-xs transition",
+                  b.id === activeBatchId
+                    ? "bg-brand-50 dark:bg-brand-950/40"
+                    : "hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                )}
+              >
+                <span className="text-slate-600 dark:text-slate-300">{fmtDateTime(b.created_at)}</span>
+                <span className="text-slate-400">{b.total_count} number(s)</span>
+                <Badge className={b.status === "completed" ? STATUS_BADGE.completed : VOICE_CALL_BADGE.calling}>
+                  {cap(b.status)}
+                </Badge>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {transcriptFor && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setTranscriptFor(null)} />
+          <div className="relative max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-5 shadow-2xl dark:bg-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">{transcriptFor.number}</h3>
+              <button className="btn-ghost" onClick={() => setTranscriptFor(null)} aria-label="Close">✕</button>
+            </div>
+            <div className="mt-3 space-y-1.5">
+              {transcriptFor.transcript.map((turn: any, i: number) => (
+                <div
+                  key={i}
+                  className={classNames(
+                    "text-xs",
+                    turn.role === "assistant" ? "text-slate-700 dark:text-slate-200" : "text-brand-600 dark:text-brand-400"
+                  )}
+                >
+                  <span className="font-semibold">{turn.role === "assistant" ? "AI: " : "Caller: "}</span>
+                  {turn.text}
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 border-t border-slate-200 pt-3 text-right dark:border-slate-800">
+              <button className="btn-secondary" onClick={() => setTranscriptFor(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

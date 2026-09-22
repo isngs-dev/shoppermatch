@@ -11,6 +11,7 @@ live at the bottom.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -25,12 +26,13 @@ from sqlalchemy.orm import selectinload
 from ..config import settings
 from ..database import get_session
 from ..deps import require_operator
-from ..models import EmailAutomation, ShopperAutomationState, User, VoiceCallLog
+from ..models import BulkCallBatch, BulkCallTarget, EmailAutomation, ShopperAutomationState, User, VoiceCallLog
 from ..serializers import iso
 from ..services.audit import record_audit
+from ..services.bulk_voice_call import MAX_BULK_CALL_TARGETS, run_bulk_call_batch
 from ..services.tenancy import enforce_campaign_access
 from ..services.tracking import now
-from ..services.voice_call import create_call, plxml_say_gather, verify_plivo_signature
+from ..services.voice_call import create_call, is_configured, plxml_say_gather, verify_plivo_signature
 from ..services.voice_call_ai import next_turn, opening_line
 
 router = APIRouter(prefix="/api/voice-calls", tags=["AI Voice Call Follow-Up"])
@@ -350,6 +352,74 @@ async def call_status(state_id: uuid.UUID, request: Request, session: AsyncSessi
 
 
 # --------------------------------------------------------------------------- #
+# Bulk Voice Call webhooks — same shape as /answer, /gather, /status above,
+# just keyed on BulkCallTarget instead of ShopperAutomationState since these
+# numbers have no automation/shopper record backing them.
+# --------------------------------------------------------------------------- #
+@router.post("/bulk-answer/{target_id}", include_in_schema=False)
+async def bulk_call_connected(target_id: uuid.UUID, request: Request, session: AsyncSession = Depends(get_session)):
+    await _verify_request(request)
+    stmt = select(BulkCallTarget).where(BulkCallTarget.id == target_id).options(selectinload(BulkCallTarget.batch))
+    target = (await session.execute(stmt)).scalar_one_or_none()
+    if target is None:
+        return _xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>')
+
+    greeting = opening_line("there", "this opportunity", "", target.batch.message)
+    gather_url = f"{settings.public_base_url.rstrip('/')}/api/voice-calls/bulk-gather/{target_id}"
+    return _xml(plxml_say_gather(greeting, gather_url))
+
+
+@router.post("/bulk-gather/{target_id}", include_in_schema=False)
+async def bulk_call_gather(target_id: uuid.UUID, request: Request, session: AsyncSession = Depends(get_session)):
+    params = await _verify_request(request)
+    target = await session.get(BulkCallTarget, target_id)
+    if target is None:
+        return _xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>')
+
+    speech = (params.get("Speech") or "").strip()
+    history: list[dict[str, str]] = [{"role": t["role"], "content": t["text"]} for t in (target.transcript or [])]
+    if speech:
+        history.append({"role": "user", "content": speech})
+        target.transcript = [*(target.transcript or []), {"role": "user", "text": speech}]
+
+    turn = await next_turn(
+        history=history,
+        shopper_name="there",
+        shop_name="this opportunity",
+        campaign_name="",
+        compensation="detailed on the call",
+    )
+    target.transcript = [*(target.transcript or []), {"role": "assistant", "text": turn["say"]}]
+
+    if turn["outcome"]:
+        target.outcome = turn["outcome"]
+        target.status = "completed"
+        target.ended_at = now()
+        await session.commit()
+        return _xml(plxml_say_gather(turn["say"], "", hang_up_after=True))
+
+    await session.commit()
+    gather_url = f"{settings.public_base_url.rstrip('/')}/api/voice-calls/bulk-gather/{target_id}"
+    return _xml(plxml_say_gather(turn["say"], gather_url))
+
+
+@router.post("/bulk-status/{target_id}", include_in_schema=False)
+async def bulk_call_status(target_id: uuid.UUID, request: Request, session: AsyncSession = Depends(get_session)):
+    params = await _verify_request(request)
+    call_status_value = params.get("CallStatus", "")
+    target = await session.get(BulkCallTarget, target_id)
+    if target is None:
+        return Response(status_code=204)
+
+    if target.status == "calling":
+        target.status = "completed" if call_status_value == "completed" else "no-answer"
+        target.outcome = target.outcome or ("undecided" if call_status_value == "completed" else None)
+        target.ended_at = now()
+    await session.commit()
+    return Response(status_code=204)
+
+
+# --------------------------------------------------------------------------- #
 # Client-facing: view call outcomes/transcripts for one automation
 # --------------------------------------------------------------------------- #
 @router.get("/automations/{automation_id}")
@@ -390,3 +460,126 @@ async def list_voice_calls_for_automation(
             for l in logs
         ]
     }
+
+
+# --------------------------------------------------------------------------- #
+# Bulk Voice Call — client-facing: create a batch, list recent batches, poll
+# one batch's progress.
+# --------------------------------------------------------------------------- #
+def _bulk_target_out(t: BulkCallTarget) -> dict:
+    return {
+        "id": str(t.id),
+        "phone_number": t.phone_number,
+        "status": t.status,
+        "outcome": t.outcome,
+        "transcript": t.transcript or [],
+        "error_message": t.error_message,
+        "attempted_at": iso(t.attempted_at),
+        "ended_at": iso(t.ended_at),
+    }
+
+
+def _bulk_batch_out(b: BulkCallBatch, with_targets: bool = True) -> dict:
+    data = {
+        "id": str(b.id),
+        "created_by": b.created_by,
+        "message": b.message,
+        "total_count": b.total_count,
+        "status": b.status,
+        "created_at": iso(b.created_at),
+    }
+    if with_targets:
+        targets = b.targets
+        data["targets"] = [_bulk_target_out(t) for t in targets]
+        data["placed"] = sum(1 for t in targets if t.status != "queued")
+        data["completed"] = sum(1 for t in targets if t.status == "completed")
+        data["failed"] = sum(1 for t in targets if t.status in ("failed", "no-answer"))
+    return data
+
+
+class BulkCallCreate(BaseModel):
+    # Raw phone numbers — E.164 preferred but a bare-digits number is
+    # auto-prepended with "+", same leniency as /test-call.
+    numbers: list[str] = Field(min_length=1, max_length=MAX_BULK_CALL_TARGETS)
+    message: str | None = Field(default=None, max_length=1000)
+
+
+@router.post("/bulk")
+async def create_bulk_call_batch(
+    body: BulkCallCreate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    if not is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Voice Call Follow-Up is not configured — set PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN and PLIVO_PHONE_NUMBER.",
+        )
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in body.numbers:
+        n = re.sub(r"[\s\-().]", "", raw)
+        if n and not n.startswith("+"):
+            n = "+" + n
+        if not _E164.match(n):
+            raise HTTPException(status_code=400, detail=f"'{raw}' is not a valid phone number (E.164, e.g. +918691969772)")
+        if n not in seen:
+            seen.add(n)
+            cleaned.append(n)
+
+    batch = BulkCallBatch(created_by=user.email, message=body.message, total_count=len(cleaned), status="running")
+    session.add(batch)
+    await session.flush()
+    session.add_all([BulkCallTarget(batch_id=batch.id, phone_number=n) for n in cleaned])
+    await record_audit(
+        session,
+        action="voice_call.bulk_batch_created",
+        actor=user.email,
+        entity_type="bulk_call_batch",
+        entity_id=str(batch.id),
+        summary=f"Started a bulk voice call batch to {len(cleaned)} number(s)",
+        meta={"count": len(cleaned)},
+    )
+    await session.commit()
+
+    # Fire-and-forget: paces calls out one at a time over the batch's
+    # lifetime (see CALL_PACING_SECONDS) — the request returns immediately
+    # rather than blocking for however long the whole batch takes.
+    asyncio.create_task(run_bulk_call_batch(batch.id))
+
+    # Re-select (not session.get()) — the batch is already in this session's
+    # identity map from the insert above, so get()'s eager-load option would
+    # be silently skipped and `targets` would stay a lazy attribute, which
+    # fails outside the session's own await context when serialized below.
+    stmt = select(BulkCallBatch).where(BulkCallBatch.id == batch.id).options(selectinload(BulkCallBatch.targets))
+    batch = (await session.execute(stmt)).scalar_one()
+    return _bulk_batch_out(batch)
+
+
+@router.get("/bulk")
+async def list_bulk_call_batches(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    stmt = (
+        select(BulkCallBatch)
+        .order_by(BulkCallBatch.created_at.desc())
+        .limit(20)
+        .options(selectinload(BulkCallBatch.targets))
+    )
+    batches = (await session.execute(stmt)).scalars().all()
+    return {"items": [_bulk_batch_out(b) for b in batches]}
+
+
+@router.get("/bulk/{batch_id}")
+async def get_bulk_call_batch(
+    batch_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    stmt = select(BulkCallBatch).where(BulkCallBatch.id == batch_id).options(selectinload(BulkCallBatch.targets))
+    batch = (await session.execute(stmt)).scalar_one_or_none()
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return _bulk_batch_out(batch)

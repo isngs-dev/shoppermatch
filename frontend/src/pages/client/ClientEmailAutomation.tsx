@@ -25,12 +25,13 @@ import { api } from "../../lib/api";
 import { classNames, statusBadgeClass } from "../../lib/format";
 import { useApi } from "../../lib/useApi";
 import { BulkSendStatusCard } from "../Outreach";
-import { EmailAutomationPanel } from "../EmailAutomation";
+import { BulkVoiceCallPanel, EmailAutomationPanel } from "../EmailAutomation";
 import { EmailTemplatesPanel } from "../EmailTemplates";
 import { ErrorBox } from "../Dashboard";
 
 const TABS = [
   { key: "automations", label: "Automations" },
+  { key: "bulk-call", label: "Bulk Voice Call" },
   { key: "tracking", label: "Tracking" },
   { key: "templates", label: "Templates" },
 ] as const;
@@ -71,6 +72,8 @@ export function ClientEmailAutomation() {
         </div>
       ) : activeTab === "tracking" ? (
         <AutomationTrackingTab />
+      ) : activeTab === "bulk-call" ? (
+        <BulkVoiceCallPanel />
       ) : (
         <>
           <BulkSendStatusCard />
