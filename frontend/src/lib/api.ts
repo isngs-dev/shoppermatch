@@ -367,6 +367,8 @@ export const api = {
     voice_call_message?: string | null;
   }) => request("/api/automations", { method: "POST", body }),
   automationVoiceCalls: (automationId: string) => request(`/api/voice-calls/automations/${automationId}`),
+  updateVoiceMessage: (id: string, message: string | null) =>
+    request(`/api/automations/${id}/voice-message`, { method: "PATCH", body: { voice_call_message: message } }),
   sendTestVoiceCall: (body: { to_number: string; automation_id?: string; message?: string | null }) =>
     request("/api/voice-calls/test-call", { method: "POST", body }),
   addAutomationShoppers: (id: string, shopperIds: string[], shopIds?: string[]) =>

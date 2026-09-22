@@ -324,6 +324,30 @@ async def get_automation(
     return _automation_out(a)
 
 
+class VoiceMessageUpdate(BaseModel):
+    # None/blank reverts to the built-in default script
+    # (services/voice_call_ai.py::opening_line).
+    voice_call_message: str | None = Field(default=None, max_length=1000)
+
+
+@router.patch("/{automation_id}/voice-message")
+async def update_voice_message(
+    automation_id: uuid.UUID,
+    body: VoiceMessageUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    """Changes the AI Voice Call opening script for shoppers who haven't been
+    called yet — takes effect immediately, no need to recreate the
+    automation. Calls already placed aren't retroactively affected."""
+    a = await _load(session, automation_id)
+    enforce_campaign_access(a.campaign, user)
+    a.voice_call_message = body.voice_call_message.strip() if body.voice_call_message and body.voice_call_message.strip() else None
+    await session.commit()
+    a = await _load(session, automation_id)
+    return _automation_out(a)
+
+
 @router.post("/{automation_id}/shoppers")
 async def add_shoppers(
     automation_id: uuid.UUID,

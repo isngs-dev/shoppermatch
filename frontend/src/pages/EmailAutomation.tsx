@@ -650,6 +650,9 @@ export function AutomationDetailPage() {
   const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
   const [testNumber, setTestNumber] = useState("");
   const [testCalling, setTestCalling] = useState(false);
+  const [editingScript, setEditingScript] = useState(false);
+  const [scriptDraft, setScriptDraft] = useState("");
+  const [savingScript, setSavingScript] = useState(false);
 
   useEffect(() => {
     const id = window.setInterval(reload, 6000);
@@ -667,6 +670,20 @@ export function AutomationDetailPage() {
       toast(e?.message || `Failed to ${action} automation`, "error");
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function saveScript() {
+    setSavingScript(true);
+    try {
+      await api.updateVoiceMessage(automationId!, scriptDraft.trim() || null);
+      toast("Voice call script updated.", "success");
+      setEditingScript(false);
+      reload();
+    } catch (e: any) {
+      toast(e?.message || "Failed to update the script", "error");
+    } finally {
+      setSavingScript(false);
     }
   }
 
@@ -776,10 +793,41 @@ export function AutomationDetailPage() {
               Wait {data.voice_call_delay_days}d after last email · retry every {data.voice_call_retry_gap_days}d · up to {data.voice_call_max_attempts} attempt(s)
             </span>
           </div>
-          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-            <span className="font-medium text-slate-600 dark:text-slate-300">Opening message:</span>{" "}
-            {data.voice_call_message ? `"${data.voice_call_message}"` : "(default script)"}
-          </p>
+          {editingScript ? (
+            <div className="mt-2">
+              <label className="label">Opening script</label>
+              <textarea
+                className="input h-24 resize-none"
+                placeholder="Leave blank to use the default script"
+                value={scriptDraft}
+                onChange={(e) => setScriptDraft(e.target.value)}
+                maxLength={1000}
+                autoFocus
+              />
+              <div className="mt-2 flex gap-2">
+                <button className="btn-primary h-8 px-3 text-xs" onClick={saveScript} disabled={savingScript}>
+                  {savingScript ? <Spinner /> : null} Save script
+                </button>
+                <button className="btn-secondary h-8 px-3 text-xs" onClick={() => setEditingScript(false)} disabled={savingScript}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+              <span className="font-medium text-slate-600 dark:text-slate-300">Opening message:</span>{" "}
+              {data.voice_call_message ? `"${data.voice_call_message}"` : "(default script)"}{" "}
+              <button
+                className="font-semibold text-brand-600 hover:underline dark:text-brand-400"
+                onClick={() => {
+                  setScriptDraft(data.voice_call_message || "");
+                  setEditingScript(true);
+                }}
+              >
+                Edit
+              </button>
+            </p>
+          )}
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <KpiCard label="Calls Placed" value={d.voice_calls_placed} accent="indigo" />
             <KpiCard label="Interested" value={d.voice_call_interested} accent="emerald" />
