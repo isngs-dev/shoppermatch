@@ -84,6 +84,11 @@ async def send_test_call(
     user: User = Depends(require_operator),
 ):
     to_number = re.sub(r"[\s\-().]", "", body.to_number)
+    # A client that types just digits (no leading "+") is a plain, common
+    # slip, not a genuinely malformed number — auto-prepend it rather than
+    # bouncing the request back for a one-character fix.
+    if to_number and not to_number.startswith("+"):
+        to_number = "+" + to_number
     if not _E164.match(to_number):
         raise HTTPException(status_code=400, detail="to_number must be in E.164 format, e.g. +918691969772")
 
