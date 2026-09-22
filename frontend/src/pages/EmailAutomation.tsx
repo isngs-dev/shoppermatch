@@ -639,9 +639,11 @@ function AutomationBuilder({
 // --------------------------------------------------------------------------- //
 // Saved Numbers checklist — a reusable list of Call Contacts (e.g. a SASSIE
 // export) with Select all/Deselect all, so a Bulk Voice Call doesn't need
-// every number re-typed by hand. Purely an inserter: checking boxes here
-// never sends anything itself — "Insert selected" appends the checked
-// numbers into whatever textarea the caller owns, deduped.
+// every number re-typed by hand. Purely a setter: checking boxes here never
+// sends anything itself — "Use selected" REPLACES whatever's currently in
+// the caller's textarea with exactly the checked numbers (not a merge —
+// the "Send Bulk Calls (N)" count downstream always matches what's checked
+// here, with no stale leftovers from an earlier selection).
 // --------------------------------------------------------------------------- //
 function SavedNumbersChecklist({ onInsert }: { onInsert: (numbers: string[]) => void }) {
   const { data, loading } = useApi(() => api.callContacts());
@@ -701,7 +703,7 @@ function SavedNumbersChecklist({ onInsert }: { onInsert: (numbers: string[]) => 
         disabled={selected.size === 0}
         onClick={() => onInsert(Array.from(selected))}
       >
-        Insert selected ({selected.size})
+        Use selected ({selected.size})
       </button>
     </div>
   );
@@ -988,10 +990,7 @@ export function AutomationDetailPage() {
             </p>
             <div className="mb-2">
               <SavedNumbersChecklist
-                onInsert={(numbers) => {
-                  const merged = new Set([...bulkNumbers, ...numbers]);
-                  setBulkNumbersText(Array.from(merged).join("\n"));
-                }}
+                onInsert={(numbers) => setBulkNumbersText(numbers.join("\n"))}
               />
             </div>
             <textarea
@@ -1333,12 +1332,7 @@ export function BulkVoiceCallPanel() {
               onChange={(e) => setNumbersText(e.target.value)}
             />
             <div className="mt-2">
-              <SavedNumbersChecklist
-                onInsert={(picked) => {
-                  const merged = new Set([...numbers, ...picked]);
-                  setNumbersText(Array.from(merged).join("\n"));
-                }}
-              />
+              <SavedNumbersChecklist onInsert={(picked) => setNumbersText(picked.join("\n"))} />
             </div>
           </div>
           <div>
