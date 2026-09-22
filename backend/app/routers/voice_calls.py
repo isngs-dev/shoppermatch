@@ -121,6 +121,73 @@ async def send_test_call(
     return {"call_sid": call_sid, "to_number": to_number, "message": greeting}
 
 
+@router.post("/real-test-call/{state_id}")
+async def send_real_test_call(
+    state_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_operator),
+):
+    """Places a real call through the exact same webhook flow a scheduled
+    voice-call follow-up uses (services/voice_call_scheduler.py::_place_call)
+    — it listens for the shopper's spoken reply and has GPT actually respond,
+    turn after turn, instead of /test-call's speak-once-and-hang-up. Lets a
+    client hear/test the real back-and-forth for one of this automation's
+    shoppers right now, without waiting for the email sequence to exhaust
+    and the configured delay window to pass."""
+    stmt = (
+        select(ShopperAutomationState)
+        .where(ShopperAutomationState.id == state_id)
+        .options(
+            selectinload(ShopperAutomationState.shopper),
+            selectinload(ShopperAutomationState.shop),
+            selectinload(ShopperAutomationState.automation).selectinload(EmailAutomation.campaign),
+            selectinload(ShopperAutomationState.automation).selectinload(EmailAutomation.shop),
+        )
+    )
+    state = (await session.execute(stmt)).scalar_one_or_none()
+    if state is None:
+        raise HTTPException(status_code=404, detail="Shopper not found in this automation")
+    enforce_campaign_access(state.automation.campaign, user)
+    if not state.automation.voice_call_enabled:
+        raise HTTPException(status_code=400, detail="AI Voice Call Follow-Up is not enabled for this automation")
+    shopper = state.shopper
+    if not shopper or not shopper.phone:
+        raise HTTPException(status_code=400, detail="This shopper has no phone number on file")
+
+    base = settings.public_base_url.rstrip("/")
+    answer_url = f"{base}/api/voice-calls/answer/{state.id}"
+    hangup_url = f"{base}/api/voice-calls/status/{state.id}"
+    call_sid = await create_call(shopper.phone, answer_url, hangup_url)
+
+    shop = state.shop or state.automation.shop
+    greeting = opening_line(
+        shopper.name,
+        shop.shop_name if shop else "this opportunity",
+        state.automation.campaign.name if state.automation.campaign else "",
+        state.automation.voice_call_message,
+    )
+    log = VoiceCallLog(
+        automation_state_id=state.id,
+        attempted_at=now(),
+        status="queued",
+        external_call_sid=call_sid,
+        transcript=[{"role": "assistant", "text": greeting}],
+    )
+    state.voice_call_status = "calling"
+    session.add(log)
+    await record_audit(
+        session,
+        action="voice_call.manual_real_test",
+        actor=user.email,
+        entity_type="shopper_automation_state",
+        entity_id=str(state.id),
+        summary=f"Manual real (full-conversation) test call placed to {shopper.name} ({shopper.phone})",
+        meta={"call_sid": call_sid, "automation_id": str(state.automation_id)},
+    )
+    await session.commit()
+    return {"call_sid": call_sid, "to_number": shopper.phone}
+
+
 @router.post("/test-answer", include_in_schema=False)
 async def test_call_connected(request: Request):
     """Plivo fetches this the instant a test call (POST /test-call) connects."""

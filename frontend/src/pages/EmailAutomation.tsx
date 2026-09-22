@@ -653,6 +653,7 @@ export function AutomationDetailPage() {
   const [editingScript, setEditingScript] = useState(false);
   const [scriptDraft, setScriptDraft] = useState("");
   const [savingScript, setSavingScript] = useState(false);
+  const [realCalling, setRealCalling] = useState<string | null>(null);
 
   useEffect(() => {
     const id = window.setInterval(reload, 6000);
@@ -684,6 +685,19 @@ export function AutomationDetailPage() {
       toast(e?.message || "Failed to update the script", "error");
     } finally {
       setSavingScript(false);
+    }
+  }
+
+  async function sendRealCall(stateId: string) {
+    setRealCalling(stateId);
+    try {
+      const res = await api.sendRealTestVoiceCall(stateId);
+      toast(`Real AI call placed to ${res.to_number} — answer it and talk, the AI will listen and respond.`, "success");
+      reload();
+    } catch (e: any) {
+      toast(e?.message || "Failed to place the real call", "error");
+    } finally {
+      setRealCalling(null);
     }
   }
 
@@ -850,7 +864,8 @@ export function AutomationDetailPage() {
           </div>
           <p className="mt-1 text-[11px] text-slate-400">
             Places one real outbound Plivo call using this automation's opening message above, then hangs up —
-            for verifying the message/connectivity, not the full AI conversation.
+            for verifying the message/connectivity, not the full AI conversation. To actually talk back and
+            forth with the AI, use "🎙 Real AI Call" next to a shopper below instead.
           </p>
         </div>
       )}
@@ -885,19 +900,29 @@ export function AutomationDetailPage() {
                 <td className="td hidden text-slate-500 lg:table-cell">{s.next_action_at ? fmtDateTime(s.next_action_at) : "—"}</td>
                 {data.voice_call_enabled && (
                   <td className="td">
-                    {s.voice_call_status ? (
+                    <div className="flex items-center gap-2">
+                      {s.voice_call_status ? (
+                        <button
+                          className="text-left"
+                          onClick={() => setTranscriptFor(s.id)}
+                          title="View call transcript"
+                        >
+                          <Badge className={VOICE_CALL_BADGE[s.voice_call_outcome || s.voice_call_status] || VOICE_CALL_BADGE.default}>
+                            {s.voice_call_outcome ? cap(s.voice_call_outcome.replace("_", " ")) : cap(s.voice_call_status.replace("_", " "))}
+                          </Badge>
+                        </button>
+                      ) : (
+                        <span className="text-slate-300 dark:text-slate-600">—</span>
+                      )}
                       <button
-                        className="text-left"
-                        onClick={() => setTranscriptFor(s.id)}
-                        title="View call transcript"
+                        className="shrink-0 text-[11px] font-semibold text-brand-600 hover:underline disabled:opacity-50 dark:text-brand-400"
+                        onClick={() => sendRealCall(s.id)}
+                        disabled={realCalling === s.id}
+                        title="Places a real call that listens and responds via AI, turn after turn — not just a one-line test"
                       >
-                        <Badge className={VOICE_CALL_BADGE[s.voice_call_outcome || s.voice_call_status] || VOICE_CALL_BADGE.default}>
-                          {s.voice_call_outcome ? cap(s.voice_call_outcome.replace("_", " ")) : cap(s.voice_call_status.replace("_", " "))}
-                        </Badge>
+                        {realCalling === s.id ? <Spinner className="h-3 w-3" /> : "🎙 Real AI Call"}
                       </button>
-                    ) : (
-                      <span className="text-slate-300 dark:text-slate-600">—</span>
-                    )}
+                    </div>
                   </td>
                 )}
                 <td className="td">

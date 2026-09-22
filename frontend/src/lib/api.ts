@@ -371,6 +371,8 @@ export const api = {
     request(`/api/automations/${id}/voice-message`, { method: "PATCH", body: { voice_call_message: message } }),
   sendTestVoiceCall: (body: { to_number: string; automation_id?: string; message?: string | null }) =>
     request("/api/voice-calls/test-call", { method: "POST", body }),
+  sendRealTestVoiceCall: (stateId: string) =>
+    request(`/api/voice-calls/real-test-call/${stateId}`, { method: "POST" }),
   addAutomationShoppers: (id: string, shopperIds: string[], shopIds?: string[]) =>
     request(`/api/automations/${id}/shoppers`, {
       method: "POST",
