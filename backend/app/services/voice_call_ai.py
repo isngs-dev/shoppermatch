@@ -50,7 +50,46 @@ _CONCLUDE_TOOL = {
 }
 
 
+# Fixed opening script for calls that have no shopper/shop record behind them
+# (Bulk Voice Call without a custom message, ad-hoc test calls).
+SHOPPERMATCH_INTRO = (
+    "Hello! This is the ShopperMatch A I assistant, calling on behalf of I S N, a mystery shopping "
+    "company. ShopperMatch connects people like you with paid mystery shopping assignments, where you "
+    "visit a store or restaurant, experience it like a regular customer, and share an honest report. "
+    "You choose which assignments to take, and you are paid for each one you complete. We recently "
+    "emailed you an invitation, and I would love to answer any questions. Do you have a couple of "
+    "minutes to chat?"
+)
+
+_GENERAL_FACTS = (
+    "FACTS you may use (nothing else): ShopperMatch A I is the shopper recruitment platform of ISN, a "
+    "mystery shopping company. Mystery shoppers visit a store, restaurant or other business as an "
+    "ordinary customer, note what they experience (service, cleanliness, product availability, etc.), "
+    "and submit an honest report afterwards. Assignments are optional and flexible: the shopper picks "
+    "which ones to take and when. Shoppers are paid for each completed assignment; exact pay and "
+    "dates depend on the specific assignment and are in the invitation email, so if asked for a "
+    "figure or date say it is listed per assignment in the email and you cannot quote it on the call. "
+    "No experience is needed."
+)
+
+
 def _system_prompt(shopper_name: str, shop_name: str, campaign_name: str, compensation: str) -> str:
+    if shop_name == "this opportunity":
+        # Generic call (no shopper/shop record): the shopper's name is unknown.
+        return (
+            "You are the ShopperMatch A I voice assistant, on a live phone call with a prospective mystery "
+            "shopper whose name you do NOT know. You already gave the opening introduction. Your job is to "
+            "have a friendly, natural, continuous conversation: answer their questions, explain how "
+            "ShopperMatch works, ask them short questions (their experience, availability, what kinds of "
+            "places they would shop, whether they would like to take assignments) and keep the "
+            "conversation going. Never ask for or say a name unless they tell you theirs, and NEVER output "
+            "placeholders or brackets like [Name]. Do not repeat the introduction. "
+            f"{_GENERAL_FACTS} "
+            "Keep every reply to 1-2 short sentences and end each with a natural question or invitation to "
+            "continue, because this is a phone call. Do NOT end the call just because they said yes or showed "
+            "interest; keep talking and exploring until THEY say they want to hang up, say goodbye, or ask to "
+            "stop being called. Only then call conclude_call."
+        )
     return (
         f"You are a friendly ISN recruiting coordinator making a brief, natural phone call to a mystery "
         f"shopper named {shopper_name}. They were already emailed about a mystery shopping opportunity "
@@ -85,7 +124,7 @@ async def next_turn(
     messages = [{"role": "system", "content": _system_prompt(shopper_name, shop_name, campaign_name, compensation)}]
     messages.extend(history)
 
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=8) as client:
         res = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},
@@ -95,7 +134,7 @@ async def next_turn(
                 "tools": [_CONCLUDE_TOOL],
                 "tool_choice": "auto",
                 "temperature": 0.6,
-                "max_tokens": 150,
+                "max_tokens": 120,
             },
         )
     if res.status_code >= 400:
@@ -135,6 +174,8 @@ def opening_line(shopper_name: str, shop_name: str, campaign_name: str, custom_m
             # Malformed placeholder in a client-authored message — fall back
             # to it literally rather than failing the call outright.
             return custom_message
+    if shop_name == "this opportunity":
+        return SHOPPERMATCH_INTRO
     return (
         f"Hi {first_name}, this is an automated call from ISN Shopper Recruitment about the "
         f"{shop_name} mystery shopping opportunity you were emailed about. Are you still interested?"

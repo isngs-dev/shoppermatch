@@ -153,6 +153,24 @@ class Settings(BaseSettings):
     openai_whisper_model: str = "whisper-1"
     openai_tts_model: str = "tts-1"
     openai_tts_voice: str = "alloy"
+    # ----- Agentic chatbot (services/chatbot/*) — reuses the OpenAI key/model above -----
+    chatbot_max_tool_rounds: int = 4
+    # The staff agent chains several API calls (look up ids, then act).
+    chatbot_staff_max_tool_rounds: int = 8
+    chatbot_history_messages: int = 24
+    chatbot_max_message_chars: int = 1000
+    chatbot_rate_limit_per_minute: int = 20
+    # Persona + behaviour of the shopper chatbot (spec "Agentic Campaign Assistant").
+    chatbot_assistant_name: str = "Maya"
+    # single_campaign: only the invitation's own campaign; multi_campaign: any
+    # campaign the shopper was invited to.
+    chatbot_mode: str = "single_campaign"
+    chatbot_coordinator_sla: str = "24 working hours"
+    # Optional larger model for complaints / multi-step planning; unset = same model.
+    chatbot_complex_model: str | None = None
+    # The staff agent chains many tool calls; a stronger model follows that far better. Unset = same model.
+    chatbot_staff_model: str | None = "gpt-4o"
+    chatbot_followup_poll_seconds: float = 60.0
     # Used by Region-Targeted Social Media Posting to generate the post
     # graphic — same key as everything else above, one more OpenAI capability.
     openai_image_model: str = "gpt-image-1"
@@ -195,6 +213,10 @@ class Settings(BaseSettings):
     # integration needed (see services/voice_call.py). Full list:
     # https://www.plivo.com/docs/voice/xml/speak/
     plivo_voice: str = "Polly.Joanna"
+    # Records the whole call (audio, mp3) on Plivo — listen under Console ->
+    # Voice -> Recordings. The opening line then also says the call may be
+    # recorded (several US states require all-party consent).
+    plivo_record_calls: bool = False
     voice_call_poll_seconds: float = 60.0
     # Global pacing cap across every automation, mirroring bulk_email_daily_limit
     # — real phone calls cost real money per minute; this is the one knob

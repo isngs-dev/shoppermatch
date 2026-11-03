@@ -8,6 +8,7 @@ import {
   IconWallet,
   IconX,
 } from "../components/Icons";
+import { ChatbotWidget } from "../components/ChatbotWidget";
 import { Logo, Spinner } from "../components/ui";
 import { api } from "../lib/api";
 import { fmtDate } from "../lib/format";
@@ -188,6 +189,7 @@ export function ShopperInvite() {
           ShopperMatch.AI · This is a synthetic demo invitation.
         </p>
       </main>
+      <ChatbotWidget audience="shopper" token={token} />
     </div>
   );
 }

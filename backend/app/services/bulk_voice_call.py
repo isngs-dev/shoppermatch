@@ -21,6 +21,7 @@ from ..config import settings
 from ..database import AsyncSessionLocal
 from ..models import BulkCallBatch, BulkCallTarget
 from .tracking import now
+from .contact_prefs import phone_opted_out
 from .voice_call import create_call
 from .voice_call_ai import opening_line
 
@@ -29,6 +30,42 @@ MAX_BULK_CALL_TARGETS = 100
 # them at once — a single Plivo number has a limited concurrent-call
 # capacity, and hammering it risks calls silently failing to connect.
 CALL_PACING_SECONDS = 3
+POLL_SECONDS = 2
+# Not answered within this long (ring_timeout is 45s) => give up and move to the next number.
+RING_WAIT_SECONDS = 75
+# Answered calls are capped by Plivo's time_limit (600s) plus a grace period for the hangup webhook.
+CALL_MAX_SECONDS = 660
+
+# Targets whose Plivo answer webhook has fired (set by the router, read by the runner: same process).
+_answered: set = set()
+
+
+def mark_answered(target_id) -> None:
+    _answered.add(target_id)
+
+
+async def _wait_for_call_to_finish(target_id) -> None:
+    """Block until this call is over so numbers are dialled strictly ONE AT A TIME. Placing the next
+    call while an earlier one was still talking ran several conversations at once on a single Plivo
+    number, and the later ones were the ones that got cut off."""
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    while True:
+        await asyncio.sleep(POLL_SECONDS)
+        async with AsyncSessionLocal() as session:
+            target = await session.get(BulkCallTarget, target_id)
+            if target is None or target.status != "calling":
+                _answered.discard(target_id)
+                return
+            answered = target_id in _answered
+            if loop.time() - started > (CALL_MAX_SECONDS if answered else RING_WAIT_SECONDS):
+                # The hangup webhook never arrived: close the target ourselves so the batch can continue.
+                target.status = "completed" if answered else "no-answer"
+                target.outcome = target.outcome or ("undecided" if answered else None)
+                target.ended_at = now()
+                await session.commit()
+                _answered.discard(target_id)
+                return
 
 
 async def run_bulk_call_batch(batch_id) -> None:
@@ -55,6 +92,11 @@ async def run_bulk_call_batch(batch_id) -> None:
             target = await session.get(BulkCallTarget, target_id)
             if target is None or target.status != "queued":
                 continue
+            if await phone_opted_out(session, target.phone_number):
+                target.status = "failed"
+                target.error_message = "This number opted out of calls."
+                await session.commit()
+                continue
             target.status = "calling"
             target.attempted_at = now()
             try:
@@ -68,6 +110,9 @@ async def run_bulk_call_batch(batch_id) -> None:
                 target.status = "failed"
                 target.error_message = str(exc)[:500]
             await session.commit()
+            placed = target.status == "calling"
+        if placed:
+            await _wait_for_call_to_finish(target_id)
         await asyncio.sleep(CALL_PACING_SECONDS)
 
     async with AsyncSessionLocal() as session:

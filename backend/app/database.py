@@ -23,6 +23,10 @@ class Base(AsyncAttrs, DeclarativeBase):
 
 def _build_engine():
     kwargs: dict = {"echo": False}
+    if settings.is_sqlite:
+        # Several calls' webhooks (and the batch runner) write at once; SQLite allows one writer, so make
+        # the others WAIT for the lock (default is 5s, after which the webhook 500s and Plivo drops the call).
+        kwargs["connect_args"] = {"timeout": 30}
     if not settings.is_sqlite:
         # Connection health checks only make sense for a real network DB.
         kwargs["pool_pre_ping"] = True
@@ -96,6 +100,11 @@ _RETROFIT_COLUMNS: list[tuple[str, str, str]] = [
     ("distribution_posts", "requires_manual_posting", "BOOLEAN DEFAULT FALSE"),
     # Social Media Automation Rules (migration 0018)
     ("shops", "created_at", "TIMESTAMP WITH TIME ZONE"),
+    # Chatbot: contact opt-out + client confidentiality (migration 0022)
+    ("shoppers", "opted_out_email", "BOOLEAN DEFAULT FALSE"),
+    ("shoppers", "opted_out_phone", "BOOLEAN DEFAULT FALSE"),
+    ("shoppers", "opted_out_at", "TIMESTAMP WITH TIME ZONE"),
+    ("campaigns", "client_confidential", "BOOLEAN DEFAULT FALSE"),
     # AI Voice Call Follow-Up (migration 0019)
     ("email_automations", "voice_call_enabled", "BOOLEAN DEFAULT FALSE"),
     ("email_automations", "voice_call_delay_days", "INTEGER DEFAULT 2"),

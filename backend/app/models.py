@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -127,6 +128,13 @@ class Shopper(Base):
     # synchronization upserts without creating duplicates on repeated runs.
     external_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
 
+    # ---- Contact opt-out (set by the chatbot's record_opt_out tool) ----
+    # Honoured by the email outbox, the voice-call scheduler and chatbot
+    # follow-ups: an opted-out channel is never contacted again.
+    opted_out_email: Mapped[bool] = mapped_column(Boolean, default=False)
+    opted_out_phone: Mapped[bool] = mapped_column(Boolean, default=False)
+    opted_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 
 # --------------------------------------------------------------------------- #
 # Campaigns (a client engagement bundling many shops)
@@ -167,6 +175,8 @@ class Campaign(Base):
     client_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # When true the shopper chatbot never names the client/brand.
+    client_confidential: Mapped[bool] = mapped_column(Boolean, default=False)
 
     shops: Mapped[list["Shop"]] = relationship(
         back_populates="campaign", cascade="all, delete-orphan"
@@ -1029,3 +1039,152 @@ class IntegrationStatus:
     CONFIGURATION_REQUIRED = "configuration_required"
     ERROR = "error"
     TESTING = "testing"
+
+
+# --------------------------------------------------------------------------- #
+# Agentic chatbot (services/chatbot/*). One conversation per chat session,
+# whichever audience is talking: ISN staff / client users ("staff"), a shopper
+# holding an invitation link ("shopper"), or an anonymous website visitor
+# ("visitor"). Every message — including the tool calls the agent made — is
+# persisted so a human can review exactly what the bot did and said.
+# --------------------------------------------------------------------------- #
+class ChatConversation(Base):
+    __tablename__ = "chat_conversations"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    audience: Mapped[str] = mapped_column(String(20), index=True)  # staff|shopper|visitor
+    # Secret handed back only to the browser that started a visitor/shopper
+    # chat; a conversation can't be resumed without it (never user-chosen).
+    session_key: Mapped[str] = mapped_column(String(64))
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    client_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    invitation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("invitations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="open", index=True)  # open|escalated
+    turn_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Consecutive knowledge lookups that found nothing — drives the
+    # "offer a human callback" fallback instead of guessing.
+    unanswered_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Two-step guard for write actions: set by the first call, only honoured
+    # by a later turn (e.g. {"action": "accepted"}).
+    pending_action: Mapped[dict | None] = mapped_column(json_col(), nullable=True)
+    # Contact details captured ONLY with explicit consent (callback request).
+    contact_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contact_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    contact_consent: Mapped[bool] = mapped_column(Boolean, default=False)
+    escalation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preferred_time: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    messages: Mapped[list["ChatMessage"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.created_at",
+    )
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_conversations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20))  # user|assistant|tool
+    content: Mapped[str] = mapped_column(Text)
+    # For role="tool": {"name": ..., "args": {...}}; for assistant turns that
+    # called tools: {"tool_calls": [...]} (reviewable audit of what ran).
+    meta: Mapped[dict | None] = mapped_column(json_col(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    conversation: Mapped["ChatConversation"] = relationship(back_populates="messages")
+
+
+# --------------------------------------------------------------------------- #
+# Shopper-chatbot actions that hand work to a human coordinator or the
+# scheduler. None of these book anything on the source MS platform
+# (SASSIE/ShopMetrics) — they record intent for ISN to confirm.
+# --------------------------------------------------------------------------- #
+INTEREST_PENDING = "Shopper Responded / Pending Confirmation"
+
+
+class ShopperInterest(Base):
+    """A shopper telling the chatbot "I'd take this shop on this date"."""
+
+    __tablename__ = "shopper_interests"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    shopper_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shoppers.id", ondelete="CASCADE"), index=True)
+    campaign_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
+    shop_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shops.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("chat_conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    preferred_date = mapped_column(Date)
+    preferred_time: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Becomes "Scheduled" only when a coordinator confirms it.
+    status: Mapped[str] = mapped_column(String(60), default=INTEREST_PENDING, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    shop: Mapped["Shop"] = relationship()
+
+
+class ChatEscalation(Base):
+    """Something the chatbot could not or must not finish itself: an
+    escalation, a reschedule/cancel request, or a callback request."""
+
+    __tablename__ = "chat_escalations"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("chat_conversations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    shopper_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("shoppers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    campaign_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    shop_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("shops.id", ondelete="SET NULL"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(20), default="escalation", index=True)  # escalation|reschedule|cancel
+    # payment_issue | assignment_conflict | technical_issue | complaint | data_deletion |
+    # low_confidence | policy_question | other
+    reason: Mapped[str] = mapped_column(String(40))
+    priority: Mapped[str] = mapped_column(String(10), default="medium")
+    summary: Mapped[str] = mapped_column(Text)
+    new_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="open", index=True)  # open|resolved
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ShopperFollowup(Base):
+    """A reminder the shopper asked for. Email ones are sent by
+    services/chatbot/followups.py; phone ones are handed to a coordinator
+    (this app never auto-dials from a chat request)."""
+
+    __tablename__ = "shopper_followups"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    shopper_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shoppers.id", ondelete="CASCADE"), index=True)
+    campaign_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True
+    )
+    invitation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("invitations.id", ondelete="SET NULL"), nullable=True
+    )
+    channel: Mapped[str] = mapped_column(String(10))  # email|phone
+    purpose: Mapped[str] = mapped_column(String(30))  # visit_reminder|form_deadline|incomplete_response
+    send_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    # pending | sent | failed | skipped_opt_out | handed_to_coordinator
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

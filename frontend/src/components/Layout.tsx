@@ -21,6 +21,7 @@ import {
 import { NotificationsBell } from "./NotificationsBell";
 import { Avatar, Logo } from "./ui";
 import { VoiceAssistant } from "./VoiceAssistant";
+import { ChatbotWidget } from "./ChatbotWidget";
 
 type NavItem = { to: string; label: string; icon: (p: any) => ReactNode };
 
@@ -154,6 +155,7 @@ export function AdminLayout() {
       </div>
 
       <VoiceAssistant />
+      <ChatbotWidget audience="staff" position="left" />
     </div>
   );
 }

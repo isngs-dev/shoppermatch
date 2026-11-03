@@ -36,7 +36,9 @@ async def enqueue_email(session, invitation: Invitation) -> EmailJob:
     even an old queued one after Send Follow-Up) still has that row, so a
     second call here must reuse and reset it rather than INSERT a new one,
     which would violate the unique constraint and 500."""
-    existing = invitation.email_job
+    # Query instead of touching `invitation.email_job`: on an invitation created in this request the
+    # relationship isn't loaded, and a lazy load inside an async session raises MissingGreenlet (a 500).
+    existing = await session.scalar(select(EmailJob).where(EmailJob.invitation_id == invitation.id))
     if existing is not None:
         existing.status = EmailJobStatus.QUEUED
         existing.attempts = 0
@@ -105,6 +107,13 @@ async def _complete_job(job_id: uuid.UUID) -> None:
         )
         job = (await session.execute(stmt)).scalar_one_or_none()
         if job is None or job.status != EmailJobStatus.SENDING or job.invitation is None:
+            return
+        if job.invitation.shopper is not None and job.invitation.shopper.opted_out_email:
+            # The shopper told the chatbot to stop — never send, never retry.
+            job.status = EmailJobStatus.FAILED
+            job.completed_at = now()
+            job.last_error = "Shopper opted out of email."
+            await session.commit()
             return
 
         try:

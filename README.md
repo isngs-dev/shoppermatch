@@ -311,6 +311,68 @@ a per-shopper timeline and a **"✓ ISN ATTRIBUTED"** badge.
 
 ---
 
+## Agentic chatbot
+
+One AI agent (OpenAI tool-calling, same `OPENAI_API_KEY` as the voice assistant) serves three audiences, each
+with its own tools and a scope enforced **in code**, never by the prompt alone. The widget (`ChatbotWidget.tsx`)
+appears bottom-left in the Admin/Client portals, on the shopper invitation page, and on the public home page; it
+hides itself when `GET /api/chatbot/status` reports `available: false`.
+
+| Audience | Endpoint | What it can do |
+|---|---|---|
+| ISN admin / client user | `POST /api/chatbot/staff/message` (bearer) | An operations agent that can do **anything the signed-in user can do on any page** (campaigns, shops, outreach/invitations, email automation, bulk voice calls, templates, social posts, reports, profile) and answer from live data. It also has quick read tools (campaigns, funnel, coverage gaps, recent activity), `navigate` (page buttons) and `request_callback`. |
+| Shopper | `POST /api/chatbot/shopper/{tracking_token}/message` (+ `GET .../greeting`) | The campaign assistant ("Maya", Hindi/English/Hinglish) from the *Agentic Campaign Assistant* spec, bound to that one invitation. Read tools: campaign details, grounded search over the campaign + shops + FAQ, available shops (max 5, with bookable dates), shop status, own context, eligibility (matched/unmatched criteria), form guide. Write tools: record interest in a shop/date, accept/decline/maybe, reschedule/cancel request, schedule a reminder, opt-out, escalate to a coordinator, log activity. |
+| Visitor | `POST /api/chatbot/visitor/message` | Answers only from `services/chatbot/knowledge.py`, anonymous open-shop counts, and a callback request that stores contact details **only with explicit consent**. |
+
+**Staff agent: how it can do everything safely** (`services/chatbot/api_tools.py`)
+
+- Instead of one hand-written tool per page, it calls the app's *own* HTTP API in-process **as the signed-in user** (a
+  short-lived token for that user is minted per call). Every existing rule therefore still applies: admin vs client access,
+  tenant scoping, over-selection guards, audit logs. It can never do more than the person it acts for, and new endpoints are
+  picked up automatically. A compact operations list (~110 operations, generated from the OpenAPI spec and filtered by role)
+  is given to the model; `describe_api_operation` returns exact parameters/body fields; `call_api` runs one.
+- Hidden from it entirely: auth/password flows, the chatbot itself, webhooks, user administration, account deactivate/delete,
+  OAuth handshakes, writes to integrations/settings (secrets), a shopper's own respond endpoint, and anything that isn't plain JSON.
+- **Reads run immediately. Every write is two-step**: the first `call_api` only stores a proposal and returns a
+  `confirmation_token`, the real-world effect (e.g. "sends real emails to shoppers", "places REAL phone calls", "publishes to
+  social accounts", "permanently deletes") and risk level. It executes only on a *later* user turn, and then runs the stored
+  proposal exactly (the model can't swap the body after the user said yes). Per-turn caps: 15 calls, 3 writes.
+- **Page-aware and role-accurate**: the widget sends the current in-app path (validated as a plain path) so "here" / "this page" work; the operations list is filtered by each route's real auth dependency (an admin-only route is hidden from clients, client-only ones from admins, public ones from everyone), so it doesn't waste calls on 403s. Chats are stored per signed-in user in the browser, so switching accounts in one tab never shows the previous user's messages.
+- After a successful change the reply carries a "Refresh page" button; each write is audit-logged (`chatbot.api_call`).
+- `CHATBOT_STAFF_MODEL` (default `gpt-4o`) sets the model for this agent; the small default model follows long multi-step
+  tasks poorly (it loops on one tool), so keep a stronger one here.
+
+**Shopper assistant rules (enforced in code, not just in the prompt)**
+
+- Identity is the secure link only; the model never supplies a shopper or campaign id, and every `shop_id` is re-validated
+  against the campaigns this shopper may discuss (`chatbot_mode`: `single_campaign` default, or `multi_campaign` = only
+  campaigns they were invited to).
+- Write tools are two-step: the first call only records a pending action; it runs only when a call with the same key
+  fields (shop+date, action, channel+time...) repeats on a *later* user turn. `record_opt_out` is applied immediately.
+- Nothing is booked on the source MS platform. Interest is stored as `Shopper Responded / Pending Confirmation`
+  (`shopper_interests`); a shop reads `Scheduled` only when it really is, and the bot may say "assigned" only then.
+- `client_confidential` (new campaign flag) redacts the client/brand name from every shopper-facing answer.
+- Opt-out (`shoppers.opted_out_email/phone`) is honoured by the email outbox, the voice-call scheduler, bulk voice calls
+  and follow-ups. Email reminders (`shopper_followups`) are sent automatically by `services/chatbot/followups.py` through
+  the normal email provider; phone follow-ups become a coordinator task, never an automatic call.
+- Escalations / reschedule / cancel requests land in `chat_escalations` (`GET /api/chatbot/admin/escalations`) with the
+  spec's summary format; the shopper is told to expect a reply within `CHATBOT_COORDINATOR_SLA`.
+- Every notable action adds an event to the invitation timeline (Chatbot Accessed, Interest Recorded, Escalated, Opted Out,
+  Follow-up Scheduled/Sent...) plus an audit-log row, so it shows in the activity tracking and reports.
+- Settings: `CHATBOT_ASSISTANT_NAME`, `CHATBOT_MODE`, `CHATBOT_COORDINATOR_SLA`, `CHATBOT_COMPLEX_MODEL` (optional larger
+  model used for complaints / long conversations).
+
+Rules carried over from the marketing_chatbot platform: answer only from tools/knowledge (a lookup with no match
+makes the bot say so and, after 2 misses or 8 turns, offer a human callback); consent before storing contact
+details; fail explicitly (503 not configured / 502 upstream) rather than fake an answer. Public conversations are
+resumable only with the `session_key` returned at creation; chats and every tool call are stored
+(`chat_conversations`, `chat_messages`, migration `0021_chatbot`) and admins can review them at
+`GET /api/chatbot/admin/conversations[/{id}]` (or ask the assistant for "chat escalations").
+
+Code: `backend/app/services/chatbot/` (`agent.py` loop, `tools.py` per-audience tools, `knowledge.py` facts),
+`backend/app/routers/chatbot.py`, tests in `backend/tests/test_chatbot.py` (OpenAI mocked at one seam).
+To teach it more facts, add entries to `knowledge.py` (keep them true; pay figures and dates stay in the DB).
+
 ## Acceptance test
 
 The exact section-29 flow is scripted and runs in-process (no server needed):

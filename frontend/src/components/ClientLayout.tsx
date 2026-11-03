@@ -17,6 +17,7 @@ import {
 } from "./Icons";
 import { Avatar, Logo } from "./ui";
 import { ClientVoiceAssistant } from "./ClientVoiceAssistant";
+import { ChatbotWidget } from "./ChatbotWidget";
 
 // Shops, Shoppers and Recommendations are deliberately not top-level nav
 // items — they only make sense scoped to one campaign (active/upcoming/
@@ -157,6 +158,7 @@ export function ClientLayout() {
       </main>
 
       <ClientVoiceAssistant />
+      <ChatbotWidget audience="staff" position="left" />
     </div>
   );
 }

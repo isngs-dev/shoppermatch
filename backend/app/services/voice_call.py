@@ -40,6 +40,15 @@ def _require_configured() -> None:
         )
 
 
+# How many consecutive silent listening windows a call tolerates before a polite goodbye
+# (the first window + MAX_SILENCE - 1 "are you still there?" re-prompts).
+MAX_SILENCE = 3
+
+
+def _with_param(url: str, key: str, value: int) -> str:
+    return f"{url}{'&' if '?' in url else '?'}{key}={value}"
+
+
 async def create_call(to_number: str, answer_url: str, hangup_url: str) -> str:
     """Places a real outbound call. Returns Plivo's call request UUID.
     `answer_url` is fetched by Plivo once the call connects
@@ -65,9 +74,11 @@ async def create_call(to_number: str, answer_url: str, hangup_url: str) -> str:
             answer_method="POST",
             hangup_url=hangup_url,
             hangup_method="POST",
-            # Caps a single call at 5 minutes — a "human to human" conversation
+            # Caps a single call at 10 minutes — a "human to human" conversation
             # that goes on forever is a cost/abuse risk, not a feature.
-            time_limit=300,
+            time_limit=600,
+            # An unanswered call is cancelled after 45s (default 120s) so a batch moves on to the next number.
+            ring_timeout=45,
         )
     except Exception as exc:  # noqa: BLE001 — the SDK raises its own exception types
         raise HTTPException(status_code=502, detail=f"Plivo call failed to start: {exc}") from None
@@ -98,26 +109,36 @@ def verify_plivo_signature(method: str, url: str, nonce: str | None, signature: 
         return False
 
 
-def plxml_say_gather(message: str, gather_action_url: str, *, hang_up_after: bool = False) -> str:
+def plxml_say_gather(
+    message: str, gather_action_url: str, *, hang_up_after: bool = False, opening: bool = False, silence: int = 0
+) -> str:
     """Builds the PLXML for one conversation turn: speak `message`, then
     listen for the shopper's spoken reply (Plivo's own speech-to-text, via
     <GetInput inputType="speech"> — no separate ASR integration needed) and
     POST it to `gather_action_url`. `hang_up_after=True` skips GetInput and
-    ends the call politely."""
+    ends the call politely. `opening=True` marks the first turn of a call: when
+    PLIVO_RECORD_CALLS is on, it starts a whole-call recording (<Record
+    recordSession>) and adds a recording notice to what's said. `silence` counts the silent listening windows so far."""
     voice = settings.plivo_voice
+    record = ""
+    if opening and settings.plivo_record_calls:
+        record = '<Record recordSession="true" redirect="false" maxLength="600" fileFormat="mp3"/>'
+        message = f"This call may be recorded. {message}"
     say = f'<Speak voice="{voice}">{escape(message)}</Speak>'
     if hang_up_after:
-        return f'<?xml version="1.0" encoding="UTF-8"?><Response>{say}<Hangup/></Response>'
+        return f'<?xml version="1.0" encoding="UTF-8"?><Response>{record}{say}<Hangup/></Response>'
     # url-quote first (preserving the URL's own structural characters), then
     # XML-attribute-escape the result — a `&` surviving url-quoting still
     # needs to become `&amp;` to be valid inside a double-quoted attribute.
     action_url = escape(quote(gather_action_url, safe="/:?=&"), {'"': "&quot;"})
     get_input = (
         f'<GetInput action="{action_url}" method="POST" '
-        f'inputType="speech" language="en-US" speechEndTimeout="auto">{say}</GetInput>'
+        f'inputType="speech" language="en-US" speechEndTimeout="auto" executionTimeout="30">{say}</GetInput>'
     )
-    # If the shopper says nothing at all, GetInput's action URL is never hit
-    # and Plivo falls through to whatever follows it in the Response — a
-    # polite goodbye rather than dead silence.
-    fallback = f'<Speak voice="{voice}">We didn\'t catch a response — thanks for your time, goodbye.</Speak><Hangup/>'
-    return f'<?xml version="1.0" encoding="UTF-8"?><Response>{get_input}{fallback}</Response>'
+    # If nobody says anything, GetInput's action URL is never hit and Plivo falls through to whatever
+    # follows it. Hanging up here is what cut conversations off mid-call whenever the person paused or
+    # the line was slow, so instead hand control back to our gather endpoint, which re-prompts
+    # ("are you still there?") a few times and only then says goodbye.
+    redirect = escape(quote(_with_param(gather_action_url, "silence", silence + 1), safe="/:?=&"))
+    fallback = f'<Redirect method="POST">{redirect}</Redirect>'
+    return f'<?xml version="1.0" encoding="UTF-8"?><Response>{record}{get_input}{fallback}</Response>'

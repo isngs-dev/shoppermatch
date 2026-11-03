@@ -12,6 +12,7 @@ live at the bottom.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -38,13 +39,43 @@ from ..models import (
 )
 from ..serializers import iso
 from ..services.audit import record_audit
-from ..services.bulk_voice_call import MAX_BULK_CALL_TARGETS, run_bulk_call_batch
+from ..services.bulk_voice_call import MAX_BULK_CALL_TARGETS, mark_answered, run_bulk_call_batch
 from ..services.tenancy import enforce_campaign_access
 from ..services.tracking import now
-from ..services.voice_call import create_call, is_configured, plxml_say_gather, verify_plivo_signature
+from ..services.voice_call import MAX_SILENCE, create_call, is_configured, plxml_say_gather, verify_plivo_signature
 from ..services.voice_call_ai import next_turn, opening_line
 
 router = APIRouter(prefix="/api/voice-calls", tags=["AI Voice Call Follow-Up"])
+log = logging.getLogger(__name__)
+
+# Plivo gives a webhook only a few seconds: if the AI is slow, re-prompt instead of dropping the call.
+AI_TURN_TIMEOUT_SECONDS = 8.0
+MAX_AI_FAILURES = 3
+_REPROMPT = "Sorry, I didn't catch that. Are you still there?"
+_TROUBLE = "Sorry, I missed that. Could you say that again?"
+_GOODBYE = "I'll let you go for now. Thanks so much for your time, goodbye."
+# create_task() only keeps a weak reference: hold batch tasks here so a running batch can't be garbage-collected.
+_batch_tasks: set = set()
+
+
+def _int_query(request: Request, name: str) -> int:
+    try:
+        return max(0, min(int(request.query_params.get(name, "0")), 99))
+    except ValueError:
+        return 0
+
+
+async def _turn_or_none(**kwargs) -> dict | None:
+    """One AI turn, or None if it failed or was too slow (never raises into the webhook)."""
+    try:
+        return await asyncio.wait_for(next_turn(**kwargs), timeout=AI_TURN_TIMEOUT_SECONDS)
+    except Exception as exc:  # noqa: BLE001 - any failure must be survivable mid-call
+        log.warning("voice call AI turn failed (%s)", type(exc).__name__)
+        return None
+
+
+def _goodbye_xml() -> Response:
+    return _xml(plxml_say_gather(_GOODBYE, "", hang_up_after=True))
 
 _E164 = re.compile(r"^\+[1-9]\d{6,14}$")
 
@@ -204,7 +235,7 @@ async def test_call_connected(request: Request):
     """Plivo fetches this the instant a test call (POST /test-call) connects."""
     await _verify_request(request)
     message = request.query_params.get("message") or "This is a test call from ShopperMatch A I. Thanks, goodbye."
-    return _xml(plxml_say_gather(message, "", hang_up_after=True))
+    return _xml(plxml_say_gather(message, "", hang_up_after=True, opening=True))
 
 
 @router.post("/test-status", include_in_schema=False)
@@ -243,7 +274,7 @@ async def call_connected(state_id: uuid.UUID, request: Request, session: AsyncSe
         state.automation.voice_call_message,
     )
     gather_url = f"{settings.public_base_url.rstrip('/')}/api/voice-calls/gather/{state_id}"
-    return _xml(plxml_say_gather(greeting, gather_url))
+    return _xml(plxml_say_gather(greeting, gather_url, opening=True))
 
 
 @router.post("/gather/{state_id}", include_in_schema=False)
@@ -266,43 +297,64 @@ async def call_gather(state_id: uuid.UUID, request: Request, session: AsyncSessi
     if state is None:
         return _xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>')
 
-    log = await _latest_call_log(session, state_id)
+    call_log = await _latest_call_log(session, state_id)
     speech = (params.get("Speech") or "").strip()
     shop = state.shop or state.automation.shop
     campaign = state.automation.campaign
+    base_url = f"{settings.public_base_url.rstrip('/')}/api/voice-calls/gather/{state_id}"
+    silence, failures = _int_query(request, "silence"), _int_query(request, "err")
+
+    async def finish(outcome: str | None) -> Response:
+        state.voice_call_outcome = outcome or state.voice_call_outcome or "undecided"
+        state.voice_call_status = "completed"
+        if call_log:
+            call_log.status = "completed"
+            call_log.outcome = state.voice_call_outcome
+            call_log.ended_at = now()
+        await session.commit()
+        return _goodbye_xml()
+
+    if not speech:
+        # Nobody spoke: ask again a couple of times before giving up (never hang up on the first pause).
+        if silence >= MAX_SILENCE:
+            return await finish(None)
+        return _xml(plxml_say_gather(_REPROMPT, base_url, silence=silence))
 
     history: list[dict[str, str]] = []
-    if log and log.transcript:
-        history = [{"role": t["role"], "content": t["text"]} for t in log.transcript]
-    if speech:
-        history.append({"role": "user", "content": speech})
-        if log:
-            log.transcript = [*(log.transcript or []), {"role": "user", "text": speech}]
+    if call_log and call_log.transcript:
+        history = [{"role": t["role"], "content": t["text"]} for t in call_log.transcript]
+    history.append({"role": "user", "content": speech})
+    if call_log:
+        call_log.transcript = [*(call_log.transcript or []), {"role": "user", "text": speech}]
 
-    turn = await next_turn(
+    turn = await _turn_or_none(
         history=history,
         shopper_name=state.shopper.name if state.shopper else "there",
         shop_name=shop.shop_name if shop else "this opportunity",
         campaign_name=campaign.name if campaign else "",
         compensation=(f"{shop.currency} {shop.compensation}" if shop and shop.compensation else "detailed in your email"),
     )
+    if turn is None:
+        if failures + 1 >= MAX_AI_FAILURES:
+            return await finish(None)
+        await session.commit()
+        return _xml(plxml_say_gather(_TROUBLE, f"{base_url}?err={failures + 1}"))
 
-    if log:
-        log.transcript = [*(log.transcript or []), {"role": "assistant", "text": turn["say"]}]
+    if call_log:
+        call_log.transcript = [*(call_log.transcript or []), {"role": "assistant", "text": turn["say"]}]
 
     if turn["outcome"]:
         state.voice_call_outcome = turn["outcome"]
         state.voice_call_status = "completed"
-        if log:
-            log.status = "completed"
-            log.outcome = turn["outcome"]
-            log.ended_at = now()
+        if call_log:
+            call_log.status = "completed"
+            call_log.outcome = turn["outcome"]
+            call_log.ended_at = now()
         await session.commit()
         return _xml(plxml_say_gather(turn["say"], "", hang_up_after=True))
 
     await session.commit()
-    gather_url = f"{settings.public_base_url.rstrip('/')}/api/voice-calls/gather/{state_id}"
-    return _xml(plxml_say_gather(turn["say"], gather_url))
+    return _xml(plxml_say_gather(turn["say"], base_url))
 
 
 @router.post("/status/{state_id}", include_in_schema=False)
@@ -373,9 +425,10 @@ async def bulk_call_connected(target_id: uuid.UUID, request: Request, session: A
     if target is None:
         return _xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>')
 
+    mark_answered(target_id)
     greeting = opening_line("there", "this opportunity", "", target.batch.message)
     gather_url = f"{settings.public_base_url.rstrip('/')}/api/voice-calls/bulk-gather/{target_id}"
-    return _xml(plxml_say_gather(greeting, gather_url))
+    return _xml(plxml_say_gather(greeting, gather_url, opening=True))
 
 
 @router.post("/bulk-gather/{target_id}", include_in_schema=False)
@@ -386,18 +439,41 @@ async def bulk_call_gather(target_id: uuid.UUID, request: Request, session: Asyn
         return _xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>')
 
     speech = (params.get("Speech") or "").strip()
-    history: list[dict[str, str]] = [{"role": t["role"], "content": t["text"]} for t in (target.transcript or [])]
-    if speech:
-        history.append({"role": "user", "content": speech})
-        target.transcript = [*(target.transcript or []), {"role": "user", "text": speech}]
+    gather_url = f"{settings.public_base_url.rstrip('/')}/api/voice-calls/bulk-gather/{target_id}"
+    silence, failures = _int_query(request, "silence"), _int_query(request, "err")
 
-    turn = await next_turn(
+    async def finish(outcome: str | None) -> Response:
+        target.outcome = outcome or target.outcome or "undecided"
+        target.status = "completed"
+        target.ended_at = now()
+        await session.commit()
+        return _goodbye_xml()
+
+    if not speech:
+        # Nobody spoke: ask again a couple of times before giving up (never hang up on the first pause).
+        if silence >= MAX_SILENCE:
+            return await finish(None)
+        return _xml(plxml_say_gather(_REPROMPT, gather_url, silence=silence))
+
+    history: list[dict[str, str]] = [{"role": t["role"], "content": t["text"]} for t in (target.transcript or [])]
+    history.append({"role": "user", "content": speech})
+    target.transcript = [*(target.transcript or []), {"role": "user", "text": speech}]
+
+    turn = await _turn_or_none(
         history=history,
         shopper_name="there",
         shop_name="this opportunity",
         campaign_name="",
         compensation="detailed on the call",
     )
+    if turn is None:
+        # The AI was slow or errored: keep the call alive and ask them to repeat, instead of a 500
+        # (which makes Plivo hang up mid-conversation).
+        if failures + 1 >= MAX_AI_FAILURES:
+            return await finish(None)
+        await session.commit()
+        return _xml(plxml_say_gather(_TROUBLE, f"{gather_url}?err={failures + 1}"))
+
     target.transcript = [*(target.transcript or []), {"role": "assistant", "text": turn["say"]}]
 
     if turn["outcome"]:
@@ -408,7 +484,6 @@ async def bulk_call_gather(target_id: uuid.UUID, request: Request, session: Asyn
         return _xml(plxml_say_gather(turn["say"], "", hang_up_after=True))
 
     await session.commit()
-    gather_url = f"{settings.public_base_url.rstrip('/')}/api/voice-calls/bulk-gather/{target_id}"
     return _xml(plxml_say_gather(turn["say"], gather_url))
 
 
@@ -577,7 +652,9 @@ async def create_bulk_call_batch(
     # Fire-and-forget: paces calls out one at a time over the batch's
     # lifetime (see CALL_PACING_SECONDS) — the request returns immediately
     # rather than blocking for however long the whole batch takes.
-    asyncio.create_task(run_bulk_call_batch(batch.id))
+    task = asyncio.create_task(run_bulk_call_batch(batch.id))
+    _batch_tasks.add(task)
+    task.add_done_callback(_batch_tasks.discard)
 
     # Re-select (not session.get()) — the batch is already in this session's
     # identity map from the insert above, so get()'s eager-load option would

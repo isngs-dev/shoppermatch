@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { IconArrowRight, IconExternal, IconMoon, IconSun, IconTarget } from "../components/Icons";
+import { ChatbotWidget } from "../components/ChatbotWidget";
 import { Logo } from "../components/ui";
 import { api } from "../lib/api";
 import { useTheme } from "../lib/theme";
@@ -132,6 +133,7 @@ export function Home() {
       <footer className="border-t border-slate-200 py-8 text-center text-xs text-slate-400 dark:border-slate-800">
         ShopperMatch.AI — synthetic demo data only. Built to demonstrate ISN outreach attribution.
       </footer>
+      <ChatbotWidget audience="visitor" />
     </div>
   );
 }

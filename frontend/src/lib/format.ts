@@ -68,6 +68,16 @@ export const EVENT_LABELS: Record<string, string> = {
   email_deferred: "Email Deferred",
   assignment_completed: "Shop Completed",
   bonus_reminder_sent: "Bonus Reminder Sent to Client",
+  chatbot_accessed: "Chatbot Accessed",
+  chatbot_activity: "Chatbot Interaction",
+  chatbot_escalated: "Chatbot Escalated to Coordinator",
+  shopper_interest_recorded: "Shopper Interest Recorded (via chatbot)",
+  shopper_response_maybe: "Shopper Responded: Maybe (via chatbot)",
+  shopper_reschedule_requested: "Reschedule Requested (via chatbot)",
+  shopper_cancel_requested: "Cancellation Requested (via chatbot)",
+  shopper_opted_out: "Shopper Opted Out of Contact",
+  followup_scheduled: "Follow-up Scheduled (via chatbot)",
+  followup_sent: "Follow-up Reminder Sent",
 };
 
 export function eventLabel(type: string): string {
@@ -106,6 +116,16 @@ export function eventDotClass(type: string): string {
     email_deferred: "bg-amber-500",
     assignment_completed: "bg-teal-500",
     bonus_reminder_sent: "bg-amber-600",
+    chatbot_accessed: "bg-cyan-500",
+    chatbot_activity: "bg-cyan-500",
+    chatbot_escalated: "bg-rose-500",
+    shopper_interest_recorded: "bg-emerald-500",
+    shopper_response_maybe: "bg-amber-500",
+    shopper_reschedule_requested: "bg-amber-600",
+    shopper_cancel_requested: "bg-rose-500",
+    shopper_opted_out: "bg-slate-500",
+    followup_scheduled: "bg-sky-500",
+    followup_sent: "bg-sky-600",
   };
   return map[type] || "bg-slate-400";
 }

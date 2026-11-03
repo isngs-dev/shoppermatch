@@ -102,6 +102,15 @@ async def _place_call(session, state: ShopperAutomationState) -> None:
         session.add(log)
         return
 
+    if shopper.opted_out_phone:
+        # Opted out via the chatbot: never call again; exhaust attempts so it isn't retried.
+        state.voice_call_status = "failed"
+        state.voice_call_attempts = automation.voice_call_max_attempts
+        state.voice_call_last_at = now()
+        log.error_message = "Shopper opted out of calls."
+        session.add(log)
+        return
+
     state.voice_call_attempts += 1
     state.voice_call_last_at = now()
 

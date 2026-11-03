@@ -47,16 +47,33 @@ async function request<T = any>(path: string, options: Options = {}): Promise<T>
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
 
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  const data = await parseBody(res);
 
   if (!res.ok) {
     if (res.status === 401) clearToken();
-    const detail =
-      (data && (data.detail || data.message)) || res.statusText || "Request failed";
-    throw new ApiError(res.status, typeof detail === "string" ? detail : "Request failed", data);
+    throw new ApiError(res.status, errorDetail(res, data), data);
   }
   return data as T;
+}
+
+// A proxy/gateway or an unhandled server error answers with plain text ("Internal Server Error"), not JSON —
+// parsing that blindly surfaced as "Unexpected token 'I' ... is not valid JSON" instead of the real problem.
+async function parseBody(res: Response): Promise<any> {
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { message: text.slice(0, 200) };
+  }
+}
+
+function errorDetail(res: Response, data: any): string {
+  if (res.status >= 500 && !(data && data.detail)) {
+    return "The server hit an unexpected error. Please try again; if it keeps happening, contact support.";
+  }
+  const detail = (data && (data.detail || data.message)) || res.statusText || "Request failed";
+  return typeof detail === "string" ? detail : "Request failed";
 }
 
 // Binary export downloads (PDF/CSV/XLSX) — same bearer auth as `request`,
@@ -98,12 +115,10 @@ async function uploadRequest(path: string, form: FormData): Promise<any> {
   const token = getToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(apiUrl(path), { method: "POST", headers, body: form });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  const data = await parseBody(res);
   if (!res.ok) {
     if (res.status === 401) clearToken();
-    const detail = (data && (data.detail || data.message)) || res.statusText || "Request failed";
-    throw new ApiError(res.status, typeof detail === "string" ? detail : "Request failed", data);
+    throw new ApiError(res.status, errorDetail(res, data), data);
   }
   return data;
 }
@@ -448,4 +463,27 @@ export const api = {
     return uploadRequest("/api/voice/command", form);
   },
   voiceSpeak: (text: string) => voiceSpeakRequest(text),
+
+  // ---- Agentic chatbot ----
+  chatbotStatus: () => request<{ available: boolean }>("/api/chatbot/status"),
+  chatbotShopperGreeting: (token: string) =>
+    request<{ greeting: string }>(`/api/chatbot/shopper/${encodeURIComponent(token)}/greeting`),
+  chatbotMessage: (
+    target: { audience: "staff" } | { audience: "visitor" } | { audience: "shopper"; token: string },
+    body: { message: string; conversation_id?: string | null; session_key?: string | null; page?: string }
+  ) => {
+    const path =
+      target.audience === "staff"
+        ? "/api/chatbot/staff/message"
+        : target.audience === "visitor"
+        ? "/api/chatbot/visitor/message"
+        : `/api/chatbot/shopper/${encodeURIComponent(target.token)}/message`;
+    return request<{
+      conversation_id: string;
+      session_key: string | null;
+      reply: string;
+      actions: { type: "navigate" | "refresh"; path?: string; label: string }[];
+      escalated: boolean;
+    }>(path, { method: "POST", body });
+  },
 };
