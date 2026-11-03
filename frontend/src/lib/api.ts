@@ -390,6 +390,7 @@ export const api = {
     request(`/api/voice-calls/real-test-call/${stateId}`, { method: "POST" }),
   createBulkCallBatch: (numbers: string[], message: string | null, automationId?: string) =>
     request("/api/voice-calls/bulk", { method: "POST", body: { numbers, message, automation_id: automationId || null } }),
+  voiceCallerId: () => request("/api/voice-calls/caller-id"),
   bulkCallBatches: (automationId?: string) => request("/api/voice-calls/bulk" + qs({ automation_id: automationId })),
   bulkCallBatch: (id: string) => request(`/api/voice-calls/bulk/${id}`),
   callContacts: () => request("/api/voice-calls/contacts"),

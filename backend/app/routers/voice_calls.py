@@ -582,6 +582,13 @@ def _bulk_batch_out(b: BulkCallBatch, with_targets: bool = True) -> dict:
     return data
 
 
+@router.get("/caller-id")
+async def get_caller_id(user: User = Depends(require_operator)):
+    """The Plivo number every outbound call (bulk and automation) is placed from — shown next to the
+    Bulk Voice Call controls so it's obvious which number recipients will see."""
+    return {"configured": is_configured(), "from_number": settings.plivo_phone_number or None}
+
+
 class BulkCallCreate(BaseModel):
     # Raw phone numbers — E.164 preferred but a bare-digits number is
     # auto-prepended with "+", same leniency as /test-call.

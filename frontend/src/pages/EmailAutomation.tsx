@@ -988,6 +988,9 @@ export function AutomationDetailPage() {
               Each number gets the full AI conversation (listens and responds), one after another, using this
               automation's opening message above.
             </p>
+            <div className="mb-1.5">
+              <CallerIdNote />
+            </div>
             <div className="mb-2">
               <SavedNumbersChecklist
                 onInsert={(numbers) => setBulkNumbersText(numbers.join("\n"))}
@@ -1254,6 +1257,25 @@ function VoiceCallTranscriptModal({
 // --------------------------------------------------------------------------- //
 const MAX_BULK_NUMBERS = 100;
 
+// "+18888477090" -> "+1 888 847 7090" (US/Canada); anything else is shown as stored.
+function prettyPhone(n: string): string {
+  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(n);
+  return m ? `+1 ${m[1]} ${m[2]} ${m[3]}` : n;
+}
+
+// Which Plivo number the calls go out from, so it's never a guess what recipients will see.
+function CallerIdNote() {
+  const { data } = useApi(() => api.voiceCallerId());
+  if (!data) return null;
+  return data.from_number ? (
+    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+      Calls are placed from <span className="font-semibold">{prettyPhone(data.from_number)}</span> (your Plivo number).
+    </p>
+  ) : (
+    <p className="text-[11px] text-rose-500">No Plivo calling number is configured (PLIVO_PHONE_NUMBER).</p>
+  );
+}
+
 export function BulkVoiceCallPanel() {
   const toast = useToast();
   const [numbersText, setNumbersText] = useState("");
@@ -1318,6 +1340,9 @@ export function BulkVoiceCallPanel() {
           through the single configured Plivo number, one at a time, with the full AI conversation (listens and
           responds, same as a single shopper's Real AI Call).
         </p>
+        <div className="mt-1">
+          <CallerIdNote />
+        </div>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <div>

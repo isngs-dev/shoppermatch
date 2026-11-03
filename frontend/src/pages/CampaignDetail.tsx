@@ -367,8 +367,9 @@ function RecommendationsTab({
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<any | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
-  const [showMore, setShowMore] = useState(false);
-  const [shortlist, setShortlist] = useState<"top5" | "top10" | "all">("top10");
+  // "recommended" = exactly the shoppers this shop still needs; "more" = the rest of the ranked pool,
+  // selectable only once over-selection is allowed for the shop.
+  const [view, setView] = useState<"recommended" | "more">("recommended");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [breakdownFor, setBreakdownFor] = useState<any | null>(null);
   const [profileFor, setProfileFor] = useState<string | null>(null);
@@ -407,7 +408,7 @@ function RecommendationsTab({
     // recommendation list is always populated without a manual click.
     setResult(null);
     setSelected(new Set());
-    setShowMore(false);
+    setView("recommended");
     if (shopId) {
       runMatching();
     }
@@ -428,13 +429,9 @@ function RecommendationsTab({
     try {
       const r = await api.aiShopRecommendations(campaignId, shopId, { limit: 20, radius: radiusOverride ?? radius });
       setResult(r);
-      setSelected(new Set());
-      // Zero Top/Strong matches would otherwise land on the "no candidates"
-      // empty state even though eligible people exist — auto-reveal
-      // potential/low matches immediately instead of requiring a separate
-      // "Show Potential Matches" click after every single run.
-      const hasTopOrStrong = (r.classification_counts.top_match ?? 0) + (r.classification_counts.strong_match ?? 0) > 0;
-      setShowMore(!hasTopOrStrong);
+      // Start with the AI's exact recommendation pre-ticked, so approving fills the shop in one click.
+      setSelected(new Set<string>((r.recommendations || []).filter((x: any) => x.recommended).map((x: any) => x.shopper_id)));
+      setView("recommended");
       return r;
     } catch (e: any) {
       setRunError(e?.message || "AI matching failed");
@@ -498,12 +495,9 @@ function RecommendationsTab({
   const topAndStrong = (result?.recommendations || []).filter(
     (r: any) => r.classification === "TOP_MATCH" || r.classification === "STRONG_MATCH"
   );
-  const potentialAndLow = (result?.recommendations || []).filter(
-    (r: any) => r.classification === "POTENTIAL_MATCH" || r.classification === "LOW_MATCH"
-  );
-  const shortlisted = showMore ? [...topAndStrong, ...potentialAndLow] : topAndStrong;
-  const visible =
-    shortlist === "all" ? shortlisted : shortlisted.slice(0, shortlist === "top5" ? 5 : 10);
+  const recommendedList = (result?.recommendations || []).filter((r: any) => r.recommended);
+  const moreList = (result?.recommendations || []).filter((r: any) => !r.recommended);
+  const visible = view === "recommended" ? recommendedList : moreList;
   const gap = required - topAndStrong.length;
 
   // A bonus only makes sense when the eligible pool itself is thin — if
@@ -595,8 +589,8 @@ function RecommendationsTab({
             <button className="btn-secondary" onClick={expandRadius} disabled={running}>
               {running ? <Spinner /> : null} Expand Search Radius (+25 km)
             </button>
-            <button className="btn-secondary" onClick={() => setShowMore(true)} disabled={showMore}>
-              {showMore ? "Showing Potential Matches" : "Show Potential Matches"}
+            <button className="btn-secondary" onClick={() => setView("more")} disabled={view === "more" || moreList.length === 0}>
+              {view === "more" ? "Showing more candidates" : `View more candidates (${moreList.length})`}
             </button>
           </div>
 
@@ -674,7 +668,9 @@ function RecommendationsTab({
                   <button
                     type="button"
                     className="font-semibold text-brand-600 hover:underline dark:text-brand-400"
-                    onClick={() => setSelected(new Set(visible.map((r: any) => r.shopper_id)))}
+                    onClick={() =>
+                      setSelected(new Set(visible.filter((r: any) => !r.already_invited).map((r: any) => r.shopper_id)))
+                    }
                   >
                     Select all
                   </button>
@@ -688,45 +684,58 @@ function RecommendationsTab({
                 </div>
               )}
               <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-xs font-semibold dark:bg-slate-800">
-                {(["top5", "top10", "all"] as const).map((mode) => (
+                {(["recommended", "more"] as const).map((mode) => (
                   <button
                     key={mode}
                     className={
                       "rounded-md px-3 py-1 " +
-                      (shortlist === mode
+                      (view === mode
                         ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white"
                         : "text-slate-500 dark:text-slate-400")
                     }
-                    onClick={() => setShortlist(mode)}
+                    onClick={() => setView(mode)}
                   >
-                    {mode === "top5" ? "Top 5" : mode === "top10" ? "Top 10" : "All Eligible"}
+                    {mode === "recommended"
+                      ? `Recommended (${recommendedList.length})`
+                      : `More candidates (${moreList.length})`}
                   </button>
                 ))}
               </div>
             </div>
           </div>
 
-          {visible.length === 0 && !showMore && potentialAndLow.length > 0 ? (
-            // The default view only shows Top/Strong matches — zero of
-            // those existing doesn't mean zero candidates exist. Say so
-            // directly instead of a bare "No candidates found" that reads
-            // as broken when there are actually N eligible people one click
-            // away, just not classified as a strong fit.
-            <div className="card flex flex-col items-center gap-3 py-10 text-center">
-              <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                No Top or Strong matches — {potentialAndLow.length} potential/low match{potentialAndLow.length === 1 ? "" : "es"} available
-              </div>
-              <p className="max-w-sm text-sm text-slate-500 dark:text-slate-400">
-                These candidates were found but scored lower on fit. Review them, or expand the search radius above
-                to look further afield.
+          {view === "recommended" && result.slots_remaining === 0 && (
+            <div className="card border border-emerald-200 p-4 text-sm text-emerald-700 dark:border-emerald-900 dark:text-emerald-300">
+              This shop already has all {required} required shopper(s) selected, so the AI has nothing more to
+              recommend. Need backup shoppers? Open <button className="font-semibold underline" onClick={() => setView("more")}>More candidates</button> and
+              allow over-selection.
+            </div>
+          )}
+
+          {view === "more" && (
+            <div className="card flex flex-wrap items-center justify-between gap-3 border border-indigo-200 p-4 dark:border-indigo-900">
+              <p className="max-w-xl text-sm text-slate-600 dark:text-slate-300">
+                {selectedShop?.shop_name || "This shop"} needs {required} shopper(s) and the AI recommended exactly
+                that many. If it needs more, you can add extra shoppers from this list
+                {shopDetail.data?.allow_over_selection ? " — over-selection is on for this shop." : " once over-selection is on."}
               </p>
-              <button className="btn-primary" onClick={() => setShowMore(true)}>
-                Show Potential Matches
+              <button
+                className={shopDetail.data?.allow_over_selection ? "btn-secondary" : "btn-primary"}
+                onClick={() => toggleOverSelection(!shopDetail.data?.allow_over_selection)}
+                disabled={togglingOverSelection}
+              >
+                {togglingOverSelection ? <Spinner /> : null}{" "}
+                {shopDetail.data?.allow_over_selection ? "Turn off over-selection" : "Allow over-selection"}
               </button>
             </div>
-          ) : visible.length === 0 ? (
+          )}
+
+          {visible.length === 0 ? (
             <div className="card">
-              <EmptyState title="No candidates found" hint="Try expanding the search radius or check shopper availability." />
+              <EmptyState
+                title={view === "more" ? "No more candidates" : "No candidates found"}
+                hint="Try expanding the search radius or check shopper availability."
+              />
             </div>
           ) : (
             <div className="grid gap-4 lg:grid-cols-2">
@@ -741,14 +750,6 @@ function RecommendationsTab({
                   onViewProfile={() => setProfileFor(r.shopper_id)}
                 />
               ))}
-            </div>
-          )}
-
-          {!showMore && visible.length > 0 && potentialAndLow.length > 0 && (
-            <div className="text-center">
-              <button className="btn-secondary" onClick={() => setShowMore(true)}>
-                Show More Candidates ({potentialAndLow.length})
-              </button>
             </div>
           )}
 
@@ -1207,7 +1208,14 @@ function CandidateCard({
     <div className="card p-5">
       <div className="flex items-start justify-between">
         <div className="flex items-start gap-3">
-          <input type="checkbox" className="mt-1.5 h-4 w-4" checked={checked} onChange={onToggle} />
+          <input
+            type="checkbox"
+            className="mt-1.5 h-4 w-4"
+            checked={checked}
+            onChange={onToggle}
+            disabled={!!r.already_invited}
+            title={r.already_invited ? "Already invited for this shop" : undefined}
+          />
           <div className="relative">
             <Avatar name={r.name} className="h-11 w-11" />
             <span className="absolute -left-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-slate-900 text-[10px] font-bold text-white">
@@ -1219,6 +1227,16 @@ function CandidateCard({
             <div className="text-xs text-slate-400">
               {AVAIL_META[(r.availability || "").toLowerCase()] || r.availability}
             </div>
+            {r.recommended && (
+              <span className="mt-1 inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                AI recommended
+              </span>
+            )}
+            {r.already_invited && (
+              <span className="mt-1 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                Already invited
+              </span>
+            )}
           </div>
         </div>
         <div className="text-right">

@@ -28,6 +28,31 @@ async def active_invitation_count(session: AsyncSession, shop_id) -> int:
     )
 
 
+async def active_shopper_ids(session: AsyncSession, shop_id) -> set:
+    """Shoppers who already hold a live (non-declined) invitation for this shop."""
+    rows = await session.execute(
+        select(Invitation.shopper_id).where(
+            Invitation.shop_id == shop_id,
+            func.coalesce(Invitation.response, "") != "declined",
+        )
+    )
+    return {r[0] for r in rows}
+
+
+def mark_recommended(recs: list[dict], invited_ids: set, slots: int) -> list[dict]:
+    """Flags exactly `slots` candidates as the AI's recommendation for a shop: the best-ranked ones that
+    aren't already invited. Everyone else stays in the list as an optional extra (over-selection)."""
+    left = max(0, slots)
+    invited = {str(i) for i in invited_ids}
+    for r in recs:
+        already = r["shopper_id"] in invited
+        r["already_invited"] = already
+        r["recommended"] = bool(left) and not already
+        if r["recommended"]:
+            left -= 1
+    return recs
+
+
 async def enforce_over_selection(session: AsyncSession, shop: Shop, additional: int) -> None:
     """Raises 409 if adding `additional` more invitations would exceed
     shop.required_shoppers and the shop hasn't opted into over-selection."""

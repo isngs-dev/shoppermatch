@@ -36,6 +36,11 @@ services:
         value: admin@isn.com
       - key: DEMO_ADMIN_PASSWORD
         value: isn-demo-2026
+      # Every outbound AI call (Bulk Voice Call + automations) is placed from this Plivo number
+      # ("ShopperMatch Follow-Up"). PLIVO_AUTH_ID / PLIVO_AUTH_TOKEN are secrets: set them in the
+      # Render dashboard, never in this file.
+      - key: PLIVO_PHONE_NUMBER
+        value: "+18888477090"
       # Set this to the service's actual onrender.com URL (or a custom
       # domain) after the first deploy — it's embedded in emailed tracking/
       # pixel/shopper links, so it must match the real public origin.

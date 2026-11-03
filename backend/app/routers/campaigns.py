@@ -22,7 +22,7 @@ from ..models import Campaign, ClientSocialAccount, DistributionPost, EventType,
 from ..serializers import campaign_out, invitation_row, iso, shop_bonus_out, shop_out, shopper_out
 from ..services.audit import record_audit
 from ..services.distribution import DESTINATION_TYPES, destination_name, generate_post_image, regions_for_shops
-from ..services.selection import enforce_over_selection
+from ..services.selection import active_invitation_count, active_shopper_ids, enforce_over_selection, mark_recommended
 from ..services.semantic_matching import MATCHING_WEIGHTS, run_matching
 from ..services.tenancy import enforce_campaign_access
 from ..services.tracking import add_event
@@ -512,7 +512,15 @@ async def ai_shop_recommendations(
     effective_radius = radius if radius is not None else parsed.get("maximum_distance_km")
     result = run_matching(list(shoppers), shop, campaign, radius_km=effective_radius, requirements=parsed)
 
-    recs = [r for r in result["recommendations"] if r["match_score"] >= min_score][:limit]
+    # The AI recommends exactly as many shoppers as this shop still needs (required minus those already
+    # selected). Everyone else stays visible as an optional extra for the over-selection flow.
+    already_selected = await active_invitation_count(session, shop.id)
+    slots_remaining = max(0, shop.required_shoppers - already_selected)
+    ranked = [r for r in result["recommendations"] if r["match_score"] >= min_score]
+    mark_recommended(ranked, await active_shopper_ids(session, shop.id), slots_remaining)
+    # `limit` never cuts into the recommended set, however many already-invited shoppers rank above it.
+    last_recommended = max((i for i, r in enumerate(ranked) if r["recommended"]), default=-1)
+    recs = ranked[: max(limit, last_recommended + 1)]
 
     top_line = (
         f"top match {recs[0]['name']} ({recs[0]['match_score']}%)"
@@ -543,6 +551,10 @@ async def ai_shop_recommendations(
         "shop_id": str(shop.id),
         "shop_name": shop.shop_name,
         "required_shoppers": shop.required_shoppers,
+        "already_selected": already_selected,
+        "slots_remaining": slots_remaining,
+        "allow_over_selection": bool(shop.allow_over_selection),
+        "recommended_for_shop": sum(1 for r in recs if r["recommended"]),
         "weights": MATCHING_WEIGHTS,
         "requirement_summary": result["requirement_summary"],
         "total_candidates": result["total_candidates"],

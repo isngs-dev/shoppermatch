@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...models import Campaign, Shop, Shopper
+from ..selection import active_invitation_count, active_shopper_ids
 from ..semantic_matching import run_matching
 
 
@@ -34,13 +35,20 @@ async def optimize_assignments(session: AsyncSession, campaign: Campaign, radius
     unfilled = []
     distances = []
 
+    # A shop that already has people selected only needs the remainder — proposing the full
+    # required count would be rejected by the over-selection guard (409) at approval time.
+    already_invited = {str(shop.id): {str(i) for i in await active_shopper_ids(session, shop.id)} for shop in shops}
+    total_slots = 0
+
     for shop, candidates in per_shop_results:
-        slots_needed = shop.required_shoppers
+        invited_here = already_invited[str(shop.id)]
+        slots_needed = max(0, shop.required_shoppers - await active_invitation_count(session, shop.id))
+        total_slots += slots_needed
         chosen = []
         for cand in candidates:
             if len(chosen) >= slots_needed:
                 break
-            if cand["shopper_id"] in used_shopper_ids:
+            if cand["shopper_id"] in used_shopper_ids or cand["shopper_id"] in invited_here:
                 continue
             chosen.append(cand)
             used_shopper_ids.add(cand["shopper_id"])
@@ -72,9 +80,8 @@ async def optimize_assignments(session: AsyncSession, campaign: Campaign, radius
                 "reason": "no eligible candidates" if eligible_counts.get(str(shop.id), 0) <= len(chosen) else "candidates claimed by other shops",
             })
 
-    total_slots = sum(s.required_shoppers for s in shops) or 1
-    filled_slots = len(proposals)
-    coverage = round((filled_slots / total_slots) * 100)
+    # Nothing left to fill anywhere means the campaign is fully covered, not 0% covered.
+    coverage = round((len(proposals) / total_slots) * 100) if total_slots else 100
     requirement_satisfaction = round(((len(shops) - len(unfilled)) / len(shops)) * 100) if shops else 100
     avg_distance = round(sum(distances) / len(distances), 1) if distances else None
 

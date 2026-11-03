@@ -266,3 +266,17 @@ async def test_create_call_cancels_unanswered_rings_quickly(monkeypatch):
     monkeypatch.setattr("plivo.RestClient", FakeClient)
     assert await voice_call.create_call("+15550001111", "https://a", "https://h") == "uuid-1"
     assert seen["ring_timeout"] == 45 and seen["time_limit"] == 600
+
+
+@pytest.mark.asyncio
+async def test_caller_id_endpoint_reports_the_plivo_number(monkeypatch):
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import app
+    from tests.test_bulk_invitations import _login
+
+    monkeypatch.setattr(settings, "plivo_phone_number", "+18888477090")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        auth = await _login(client)
+        body = (await client.get("/api/voice-calls/caller-id", headers=auth)).json()
+    assert body["from_number"] == "+18888477090"
