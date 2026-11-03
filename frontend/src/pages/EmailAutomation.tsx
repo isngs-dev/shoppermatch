@@ -1411,6 +1411,9 @@ export function BulkVoiceCallPanel() {
                       <Badge className={VOICE_CALL_BADGE[t.status.replace("-", "_")] || VOICE_CALL_BADGE.default}>
                         {cap(t.status.replace(/[-_]/g, " "))}
                       </Badge>
+                      {t.error_message && (
+                        <div className="mt-1 max-w-[16rem] text-[11px] leading-snug text-rose-500">{t.error_message}</div>
+                      )}
                     </td>
                     <td className="td text-slate-500">{t.outcome ? cap(t.outcome.replace("_", " ")) : "—"}</td>
                     <td className="td">

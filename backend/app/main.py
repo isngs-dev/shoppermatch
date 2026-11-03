@@ -10,6 +10,7 @@ Serves, from a single origin:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -50,6 +51,16 @@ from .services.outbox import reset_stuck_jobs, run_outbox_worker
 from .services.social_publisher import run_social_publisher
 from .services.chatbot.followups import run_followup_worker
 from .services.voice_call_scheduler import run_voice_call_scheduler
+
+# uvicorn only configures its own loggers, so without a handler this app's INFO lines (e.g. the per-call
+# hangup/gather trail in routers/voice_calls.py) are dropped and a cut-off call leaves nothing to debug from.
+_app_log = logging.getLogger("app")
+if not _app_log.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s: %(message)s"))
+    _app_log.addHandler(_handler)
+    _app_log.setLevel(logging.INFO)
+    _app_log.propagate = False
 
 
 @asynccontextmanager

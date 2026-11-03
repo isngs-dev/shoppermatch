@@ -441,6 +441,7 @@ async def bulk_call_gather(target_id: uuid.UUID, request: Request, session: Asyn
     speech = (params.get("Speech") or "").strip()
     gather_url = f"{settings.public_base_url.rstrip('/')}/api/voice-calls/bulk-gather/{target_id}"
     silence, failures = _int_query(request, "silence"), _int_query(request, "err")
+    log.info("bulk call %s gather: speech_chars=%d silence=%d err=%d", target_id, len(speech), silence, failures)
 
     async def finish(outcome: str | None) -> Response:
         target.outcome = outcome or target.outcome or "undecided"
@@ -495,10 +496,23 @@ async def bulk_call_status(target_id: uuid.UUID, request: Request, session: Asyn
     if target is None:
         return Response(status_code=204)
 
+    cause, source, duration = params.get("HangupCauseName"), params.get("HangupSource"), params.get("Duration")
+    user_turns = sum(1 for t in (target.transcript or []) if t.get("role") == "user")
+    log.info(
+        "bulk call %s hung up: status=%s cause=%s source=%s duration=%ss user_turns=%d",
+        target_id, call_status_value, cause, source, duration, user_turns,
+    )
     if target.status == "calling":
+        # Plivo (or the callee) ended the call before our own goodbye: this is the "call got cut" case,
+        # so keep Plivo's own explanation instead of silently reporting a clean "completed".
         target.status = "completed" if call_status_value == "completed" else "no-answer"
         target.outcome = target.outcome or ("undecided" if call_status_value == "completed" else None)
         target.ended_at = now()
+        if cause or source:
+            target.error_message = (
+                f"Call ended by {source or 'unknown'}: {cause or call_status_value or 'no reason given'}"
+                f"{f' after {duration}s' if duration else ''}; {user_turns} reply(ies) heard."
+            )[:500]
     await session.commit()
     return Response(status_code=204)
 

@@ -280,3 +280,31 @@ async def test_caller_id_endpoint_reports_the_plivo_number(monkeypatch):
         auth = await _login(client)
         body = (await client.get("/api/voice-calls/caller-id", headers=auth)).json()
     assert body["from_number"] == "+18888477090"
+
+
+@pytest.mark.asyncio
+async def test_bulk_hangup_keeps_plivos_reason_for_a_cut_call(monkeypatch):
+    """A call Plivo/the callee ends early must say why (cause, who, how long), not just read 'completed'."""
+    monkeypatch.setattr(settings, "plivo_auth_token", None)
+    await _fresh_db()
+    tid = await _bulk_target()
+    async with _client() as client:
+        r = await client.post(
+            f"/api/voice-calls/bulk-status/{tid}",
+            data={"CallStatus": "completed", "HangupCauseName": "Normal Hangup", "HangupSource": "Callee", "Duration": "12"},
+        )
+    assert r.status_code == 204
+    t = await _target(tid)
+    assert t.status == "completed" and t.ended_at is not None
+    assert "Callee" in t.error_message and "Normal Hangup" in t.error_message and "12s" in t.error_message
+    assert "0 reply" in t.error_message
+
+
+@pytest.mark.asyncio
+async def test_bulk_hangup_after_our_own_goodbye_adds_no_error(monkeypatch):
+    monkeypatch.setattr(settings, "plivo_auth_token", None)
+    await _fresh_db()
+    tid = await _bulk_target(status="completed")
+    async with _client() as client:
+        await client.post(f"/api/voice-calls/bulk-status/{tid}", data={"CallStatus": "completed", "HangupCauseName": "Normal Hangup"})
+    assert (await _target(tid)).error_message is None
