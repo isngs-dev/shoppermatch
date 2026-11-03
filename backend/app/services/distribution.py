@@ -77,6 +77,38 @@ def regions_for_shops(shops: list[Shop]) -> dict[str, list[Shop]]:
     return grouped
 
 
+def _image_models() -> list[str]:
+    """The configured model first, then the fallbacks, without repeats."""
+    chain = [settings.openai_image_model, *(settings.openai_image_fallback_models or "").split(",")]
+    seen: list[str] = []
+    for m in (c.strip() for c in chain):
+        if m and m not in seen:
+            seen.append(m)
+    return seen
+
+
+def _model_unavailable(res) -> bool:
+    """True when OpenAI refused because this account can't use the requested image model (it doesn't exist
+    for the key, or the organization isn't verified for it) — as opposed to a bad prompt or a transient error."""
+    if res.status_code < 400 or res.status_code >= 500:
+        return False
+    text = res.text.lower()
+    return any(s in text for s in ("does not exist", "model_not_found", "must be verified", "verify organization", "do not have access"))
+
+
+def _image_from_response(res) -> str:
+    if res.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Image generation failed: {res.text[:300]}")
+    data = res.json()["data"][0]
+    url = data.get("url")
+    if not url:
+        b64 = data.get("b64_json")
+        if not b64:
+            raise HTTPException(status_code=502, detail="Image generation returned no image")
+        url = f"data:image/png;base64,{b64}"
+    return url
+
+
 async def generate_post_image(campaign_name: str, message: str, custom_prompt: str | None = None) -> str:
     """The one genuinely-real AI call in this feature: DALL-E generates an
     actual promotional graphic for the post (the "same one-click posting
@@ -107,21 +139,16 @@ async def generate_post_image(campaign_name: str, message: str, custom_prompt: s
         f"marketing style, no readable text or letters in the image, wide banner composition."
     )
     async with httpx.AsyncClient(timeout=60) as client:
-        res = await client.post(
-            "https://api.openai.com/v1/images/generations",
-            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
-            json={"model": settings.openai_image_model, "prompt": prompt, "size": "1024x1024", "n": 1},
-        )
-    if res.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Image generation failed: {res.text[:300]}")
-    data = res.json()["data"][0]
-    url = data.get("url")
-    if not url:
-        b64 = data.get("b64_json")
-        if not b64:
-            raise HTTPException(status_code=502, detail="Image generation returned no image")
-        url = f"data:image/png;base64,{b64}"
-    return url
+        for model in _image_models():
+            res = await client.post(
+                "https://api.openai.com/v1/images/generations",
+                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                json={"model": model, "prompt": prompt, "size": "1024x1024", "n": 1},
+            )
+            # e.g. gpt-image-1 "does not exist" for accounts without access: try the next model in the chain.
+            if not _model_unavailable(res):
+                break
+    return _image_from_response(res)
 
 
 async def generate_post_image_from_photo(
@@ -136,8 +163,8 @@ async def generate_post_image_from_photo(
     starting from a client-supplied photo (OpenAI's image *edit* endpoint,
     not text-to-image) — the client uploads a real shop/product/shopper
     photo and gets back a on-brand graphic built from it, rather than a
-    generic AI illustration. gpt-image-1 (this app's configured image
-    model) only ever returns b64_json for edits, never a hosted url.
+    generic AI illustration. gpt-image models (this app's configured image
+    models) only ever return b64_json for edits, never a hosted url.
 
     `custom_prompt`, when given, fully replaces the auto-built template
     below (same override semantics as generate_post_image)."""
@@ -153,19 +180,13 @@ async def generate_post_image_from_photo(
         "No readable text or letters in the image."
     )
     async with httpx.AsyncClient(timeout=60) as client:
-        res = await client.post(
-            "https://api.openai.com/v1/images/edits",
-            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
-            data={"model": settings.openai_image_model, "prompt": prompt, "size": "1024x1024", "n": "1"},
-            files={"image": (photo_filename, photo_bytes, content_type or "image/png")},
-        )
-    if res.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Image generation failed: {res.text[:300]}")
-    data = res.json()["data"][0]
-    url = data.get("url")
-    if not url:
-        b64 = data.get("b64_json")
-        if not b64:
-            raise HTTPException(status_code=502, detail="Image generation returned no image")
-        url = f"data:image/png;base64,{b64}"
-    return url
+        for model in _image_models():
+            res = await client.post(
+                "https://api.openai.com/v1/images/edits",
+                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                data={"model": model, "prompt": prompt, "size": "1024x1024", "n": "1"},
+                files={"image": (photo_filename, photo_bytes, content_type or "image/png")},
+            )
+            if not _model_unavailable(res):
+                break
+    return _image_from_response(res)

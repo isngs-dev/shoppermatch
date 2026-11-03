@@ -173,7 +173,10 @@ class Settings(BaseSettings):
     chatbot_followup_poll_seconds: float = 60.0
     # Used by Region-Targeted Social Media Posting to generate the post
     # graphic — same key as everything else above, one more OpenAI capability.
-    openai_image_model: str = "gpt-image-1"
+    openai_image_model: str = "gpt-image-1.5"
+    # Comma-separated, tried in order when the account can't use openai_image_model (e.g. an older
+    # gpt-image-1 that "does not exist" for the key, or one that needs a verified OpenAI organization).
+    openai_image_fallback_models: str = "gpt-image-1.5,gpt-image-1-mini"
 
     # ----- Social Media Automation: Facebook (Meta Graph API) -----
     # Real OAuth — requires a Meta Developer App with App Review approved for
