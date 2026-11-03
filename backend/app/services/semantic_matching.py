@@ -299,6 +299,8 @@ def run_matching(
     excluded_inactive = 0
     excluded_unavailable = 0
     excluded_radius = 0
+    # Distances of otherwise-eligible shoppers the radius cut off: how far widening would have to go.
+    outside_distances: list[float] = []
     excluded_requirements = 0
 
     for s in shoppers:
@@ -323,6 +325,7 @@ def run_matching(
         row = score_shopper(s, shop, campaign, requirement_vec)
         if radius_km is not None and row["distance_km"] is not None and row["distance_km"] > radius_km:
             excluded_radius += 1
+            outside_distances.append(row["distance_km"])
             continue
         scored.append(row)
 
@@ -345,5 +348,6 @@ def run_matching(
             "potential_match": counts.get("POTENTIAL_MATCH", 0),
             "low_match": counts.get("LOW_MATCH", 0),
         },
+        "outside_distances": sorted(outside_distances),
         "recommendations": scored,
     }

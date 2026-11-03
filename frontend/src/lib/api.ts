@@ -342,8 +342,12 @@ export const api = {
     request("/api/ai/acceptance-probability" + qs({ shopper_id: shopperId, shop_id: shopId })),
   aiCampaignHealth: (campaignId: string) => request(`/api/ai/campaigns/${campaignId}/health`),
   aiCampaignPerformance: (campaignId: string) => request(`/api/ai/campaigns/${campaignId}/performance`),
-  aiOptimizeAssignments: (campaignId: string, radiusKm?: number) =>
-    request(`/api/ai/campaigns/${campaignId}/optimize-assignments` + qs({ radius_km: radiusKm }), { method: "POST" }),
+  // `shopRadii` widens individual shops (keyed by shop id) without widening the whole campaign.
+  aiOptimizeAssignments: (campaignId: string, radiusKm?: number, shopRadii?: Record<string, number>) =>
+    request(`/api/ai/campaigns/${campaignId}/optimize-assignments` + qs({ radius_km: radiusKm }), {
+      method: "POST",
+      body: shopRadii && Object.keys(shopRadii).length ? { shop_radii: shopRadii } : undefined,
+    }),
   aiAnomalies: () => request("/api/ai/anomalies"),
   aiDataQuality: () => request("/api/ai/data-quality"),
   aiFeedbackAnalysis: (campaignId: string) => request(`/api/ai/campaigns/${campaignId}/feedback-analysis`),

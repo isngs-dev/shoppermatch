@@ -186,6 +186,17 @@ function OverviewTab({ campaign: c }: { campaign: any }) {
           <Field label="Status" value={c.status} />
           <Field label="Created" value={fmtDate(c.created_at)} />
           <Field label="Deadline" value={fmtDate(c.deadline)} />
+          <Field
+            label="Total shops"
+            value={
+              <>
+                {c.total_shops ?? 0}
+                <span className="ml-2 text-xs font-normal text-slate-400">
+                  {c.completed_shops ?? 0} completed · {Math.max(0, (c.total_shops ?? 0) - (c.completed_shops ?? 0))} remaining
+                </span>
+              </>
+            }
+          />
         </dl>
       </div>
       <div className="card p-5">
@@ -351,6 +362,30 @@ const AVAIL_META: Record<string, string> = {
   unavailable: "✕ Unavailable",
 };
 
+// How a shop stands for staffing — decided by the backend (services/staffing.py) so every campaign and shop
+// follows the same rule: filled → ready (the AI found exactly who's needed) → short (it couldn't, so widen
+// the radius and then recommend a bonus).
+const STAFFING_STYLE: Record<string, { card: string; dot: string; pill: string; label: string }> = {
+  filled: {
+    card: "border-emerald-200 dark:border-emerald-900",
+    dot: "bg-emerald-500",
+    pill: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+    label: "Fully staffed",
+  },
+  ready: {
+    card: "border-indigo-200 dark:border-indigo-900",
+    dot: "bg-indigo-500",
+    pill: "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300",
+    label: "AI recommendation ready",
+  },
+  short: {
+    card: "border-amber-200 dark:border-amber-900",
+    dot: "bg-amber-500",
+    pill: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+    label: "Recruitment gap",
+  },
+};
+
 function RecommendationsTab({
   campaignId,
   campaign,
@@ -364,11 +399,14 @@ function RecommendationsTab({
   const shops = useApi(() => api.campaignShops(campaignId), [campaignId]);
   const [shopId, setShopId] = useState("");
   const [radius, setRadius] = useState(25);
+  // How many times the radius was widened for this shop — a bonus is recommended once widening was tried
+  // (or can't help) and the shop is still short.
+  const [widened, setWidened] = useState(0);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<any | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
-  // "recommended" = exactly the shoppers this shop still needs; "more" = the rest of the ranked pool,
-  // selectable only once over-selection is allowed for the shop.
+  // "recommended" = exactly the shoppers this shop still needs. "more" (the rest of the ranked pool, for
+  // over-selection) can only be opened once the AI has recommended everyone the shop needs.
   const [view, setView] = useState<"recommended" | "more">("recommended");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [breakdownFor, setBreakdownFor] = useState<any | null>(null);
@@ -377,6 +415,8 @@ function RecommendationsTab({
   const [togglingOverSelection, setTogglingOverSelection] = useState(false);
   const [bonusShop, setBonusShop] = useState<any | null>(null);
   const [bonusSuggestion, setBonusSuggestion] = useState<{ amount: number; note: string } | null>(null);
+  // Bumped whenever a bonus is saved, so Auto Assign re-runs and picks up the shoppers the bonus now reaches.
+  const [bonusVersion, setBonusVersion] = useState(0);
   const toast = useToast();
 
   const shopDetail = useApi(() => (shopId ? api.shop(shopId) : Promise.resolve(null)), [shopId]);
@@ -403,25 +443,23 @@ function RecommendationsTab({
   }, [shops.data]);
 
   useEffect(() => {
-    // Selected shop changed — clear any previous run and selection (spec §22/23),
-    // then automatically analyze this shop's eligible shoppers so the AI
-    // recommendation list is always populated without a manual click.
+    // Selected shop changed — start fresh (spec §22/23) and analyze this shop's eligible shoppers right away
+    // so the AI recommendation is always there without a manual click.
     setResult(null);
     setSelected(new Set());
     setView("recommended");
+    setRadius(25);
+    setWidened(0);
     if (shopId) {
-      runMatching();
+      runMatching(25);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shopId]);
 
   const selectedShop = shops.data?.items.find((s: any) => s.id === shopId);
 
-  // Accepts an explicit radius so callers that just changed the radius (e.g.
-  // Expand Search Radius) can re-run immediately with the new value, rather
-  // than reading the `radius` state — which wouldn't have committed yet in
-  // the same handler (setState is async), so the request would silently go
-  // out with the OLD radius even though the input already shows the new one.
+  // Takes the radius explicitly so a caller that just changed it (Expand Search Radius) re-runs with the new
+  // value instead of the `radius` state, which hasn't committed yet inside the same handler.
   async function runMatching(radiusOverride?: number): Promise<any | null> {
     if (!shopId) return null;
     setRunning(true);
@@ -441,22 +479,26 @@ function RecommendationsTab({
     }
   }
 
-  async function expandRadius() {
-    const next = radius + 25;
-    const before = result?.excluded?.outside_radius ?? 0;
+  // The backend says which radius actually reaches more shoppers (never past a visitable distance).
+  async function expandRadius(to?: number) {
+    const next = to ?? radius + 25;
     setRadius(next);
+    setWidened((n) => n + 1);
     const r = await runMatching(next);
-    // The button's whole promise is "closes the gap by looking further
-    // afield" — if the same shoppers are still outside the new radius too
-    // (common once the next real candidate is much farther away than one
-    // +25km step), say so explicitly instead of leaving the client to
-    // wonder why clicking it again did nothing.
-    if (r && (r.excluded?.outside_radius ?? 0) === before && before > 0) {
-      toast(
-        `No additional candidates found within ${next} km — the next-closest excluded shopper(s) are farther than that. Try expanding further or review potential matches.`,
-        "info"
-      );
+    if (!r) return;
+    const st = r.staffing;
+    if (st.state !== "short") {
+      toast(`Widening to ${next} km found everyone this shop needs.`, "success");
+    } else if (st.recruit_locally) {
+      toast(`Still short at ${next} km and nobody else is within visiting distance — recruit shoppers near this shop.`, "info");
+    } else if (st.bonus_recommended) {
+      toast(`Still short at ${next} km — the AI recommends adding a bonus to attract shoppers.`, "info");
     }
+  }
+
+  function openBonus(suggestion?: { amount: number; note: string } | null) {
+    setBonusSuggestion(suggestion ?? null);
+    setBonusShop(selectedShop);
   }
 
   function toggleSelect(id: string) {
@@ -468,14 +510,18 @@ function RecommendationsTab({
     });
   }
 
+  function outreachUrl() {
+    const type = campaign.bucket === "upcoming" ? "upcoming" : "active";
+    return `/client/outreach?campaign=${campaignId}&shop=${shopId}&type=${type}`;
+  }
+
   async function approveAndGoToOutreach() {
     if (!shopId || selected.size === 0) return;
     setApproving(true);
     try {
       const res = await api.approveAiRecommendations(campaignId, shopId, Array.from(selected));
       toast(`Approved ${res.count} shopper(s) — sending you to Outreach to email them.`, "success");
-      const type = campaign.bucket === "upcoming" ? "upcoming" : "active";
-      navigate(`/client/outreach?campaign=${campaignId}&shop=${shopId}&type=${type}`);
+      navigate(outreachUrl());
     } catch (e: any) {
       toast(e?.message || "Failed to approve recommendations", "error");
     } finally {
@@ -492,249 +538,150 @@ function RecommendationsTab({
     );
 
   const required = selectedShop?.required_shoppers ?? 0;
-  const topAndStrong = (result?.recommendations || []).filter(
-    (r: any) => r.classification === "TOP_MATCH" || r.classification === "STRONG_MATCH"
-  );
-  const recommendedList = (result?.recommendations || []).filter((r: any) => r.recommended);
-  const moreList = (result?.recommendations || []).filter((r: any) => !r.recommended);
-  const visible = view === "recommended" ? recommendedList : moreList;
-  const gap = required - topAndStrong.length;
-
-  // A bonus only makes sense when the eligible pool itself is thin — if
-  // there are plenty of eligible shoppers nearby but few ranked top/strong,
-  // the actual fix is broader outreach (radius/potential matches), not
-  // paying more. "Thin pool" here means even every eligible shopper,
-  // regardless of match quality, wouldn't comfortably cover the requirement.
-  const poolIsThin =
-    !!result && required > 0 && (result.eligible_count <= required * 2 || topAndStrong.length === 0);
-  const suggestedBonus =
-    result && gap > 0 && poolIsThin && selectedShop && !selectedShop.bonus && selectedShop.compensation
-      ? {
-          amount: Math.max(50, Math.round((selectedShop.compensation * (0.2 + 0.3 * Math.min(1, gap / required))) / 50) * 50),
-          note: `AI-suggested — recruitment gap of ${gap} shopper(s) with only ${result.eligible_count} eligible nearby.`,
-        }
-      : null;
+  const staffing = result?.staffing;
+  const all: any[] = result?.recommendations || [];
+  const recommendedList = all.filter((r) => r.recommended);
+  const moreList = all.filter((r) => !r.recommended && !r.already_invited);
+  const alreadyList = all.filter((r) => r.already_invited);
+  // "More candidates" only exists once the shop has what it needs (all recommended, or already staffed).
+  const canShowMore = !!staffing && staffing.state !== "short" && moreList.length > 0;
+  const visible = view === "more" && canShowMore ? moreList : recommendedList;
+  const stillNeeded = staffing?.slots_open ?? selectedShop?.open_slots ?? required;
+  const selectedCount = staffing?.already_selected ?? selectedShop?.selected_shoppers ?? 0;
+  const allowOverSelection = !!shopDetail.data?.allow_over_selection;
 
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-base font-bold text-slate-900 dark:text-white">AI Shopper Recommendations</h2>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          AI-assisted semantic matching based on campaign requirements, experience, location and availability.
+          Pick a shop. The AI recommends exactly the shoppers it still needs — if it can't find enough, it helps you
+          close the gap.
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-        <ContextField label="Campaign" value={campaign.name} />
-        <ContextField label="Shop" value={selectedShop?.shop_name || "—"} />
-        <ContextField label="Required Shoppers" value={required} />
-        <ContextField label="Search Radius" value={`${radius} km`} />
+      {/* 1 — which shop, and where it stands */}
+      <div className="card p-4">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-[16rem] flex-1">
+            <label className="label">Shop</label>
+            <select className="input" value={shopId} onChange={(e) => setShopId(e.target.value)}>
+              {shops.data.items.map((s: any) => (
+                <option key={s.id} value={s.id}>
+                  {s.shop_name} — {s.open_slots === 0 ? "✓ filled" : `needs ${s.open_slots} more`}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-4 gap-2 text-center">
+            <ShopStat label="Required" value={required} />
+            <ShopStat label="Selected" value={selectedCount} />
+            <ShopStat label="Still needed" value={stillNeeded} accent={stillNeeded > 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"} />
+            <ShopStat
+              label="Radius"
+              value={`${radius} km`}
+              hint={staffing?.bonus_reach_km > 0 ? `+${staffing.bonus_reach_km.toLocaleString()} km from bonus` : undefined}
+            />
+          </div>
+        </div>
+        {selectedShop && (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 text-xs dark:border-slate-800">
+            <span className="text-slate-500 dark:text-slate-400">
+              {selectedShop.bonus ? (
+                <>
+                  💰 Bonus {fmtMoney(selectedShop.bonus.amount, selectedShop.bonus.currency)}
+                  {selectedShop.bonus.completed_at
+                    ? ` — awarded to ${selectedShop.bonus.awarded_shopper_name || "shopper"}`
+                    : " — pending, funded by you, paid outside ShopperMatch"}
+                </>
+              ) : (
+                "No bonus set for this shop."
+              )}
+            </span>
+            <button className="font-semibold text-brand-600 hover:underline dark:text-brand-400" onClick={() => openBonus()}>
+              {selectedShop.bonus ? "Edit bonus" : "+ Add bonus"}
+            </button>
+          </div>
+        )}
       </div>
 
-      {selectedShop && (
-        <div className="card flex flex-wrap items-center justify-between gap-3 p-4">
-          <div>
-            <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-              Bonus for {selectedShop.shop_name}
-            </div>
-            {selectedShop.bonus ? (
-              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                💰 {fmtMoney(selectedShop.bonus.amount, selectedShop.bonus.currency)}
-                {selectedShop.bonus.completed_at
-                  ? ` — awarded to ${selectedShop.bonus.awarded_shopper_name || "shopper"}`
-                  : " — pending, funded by you, paid outside ShopperMatch"}
-              </div>
-            ) : (
-              <div className="mt-1 text-xs text-slate-400">
-                No bonus set — an extra incentive can help fill this shop faster.
-              </div>
-            )}
-          </div>
-          <button className="btn-secondary" onClick={() => setBonusShop(selectedShop)}>
-            {selectedShop.bonus ? "Edit Bonus" : "+ Add Bonus"}
-          </button>
-        </div>
-      )}
-
-      {/* Right at the top of the page, above Auto Assign / Outreach
-          Prioritization / the controls — this is the most actionable thing
-          to see immediately after a run: "you're short, here's how to fix
-          it," not something to discover after scrolling past other cards. */}
-      {result && gap > 0 && (
-        <div className="card border border-amber-200 p-5 dark:border-amber-900">
-          <div className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-              Recruitment Gap Detected
-            </h3>
-          </div>
-          <div className="mt-2 grid grid-cols-3 gap-3 text-sm">
-            <div>
-              <div className="text-xs text-slate-400">Required</div>
-              <div className="font-semibold text-slate-800 dark:text-slate-100">{required}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-400">Top/Strong matches</div>
-              <div className="font-semibold text-slate-800 dark:text-slate-100">{topAndStrong.length}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-400">Gap</div>
-              <div className="font-semibold text-rose-600 dark:text-rose-400">{gap} shopper(s)</div>
-            </div>
-          </div>
-          <p className="mt-3 text-sm text-slate-600 dark:text-slate-400">
-            Expand recruitment radius or include potential matches to close this gap.
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button className="btn-secondary" onClick={expandRadius} disabled={running}>
-              {running ? <Spinner /> : null} Expand Search Radius (+25 km)
-            </button>
-            <button className="btn-secondary" onClick={() => setView("more")} disabled={view === "more" || moreList.length === 0}>
-              {view === "more" ? "Showing more candidates" : `View more candidates (${moreList.length})`}
-            </button>
-          </div>
-
-          {suggestedBonus && (
-            <div className="mt-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3 dark:border-indigo-900 dark:bg-indigo-950/30">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm text-indigo-800 dark:text-indigo-300">
-                  🤖 <span className="font-semibold">AI suggests a {fmtMoney(suggestedBonus.amount, selectedShop.currency)} bonus</span> —
-                  the eligible pool here is thin ({result.eligible_count} eligible for {required} needed), so a
-                  bonus is more likely to convert reluctant shoppers than a wider search.
-                </p>
-                <button
-                  className="btn-primary shrink-0"
-                  onClick={() => {
-                    setBonusSuggestion(suggestedBonus);
-                    setBonusShop(selectedShop);
-                  }}
-                >
-                  Add Suggested Bonus
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      <AutoAssignCard campaignId={campaignId} shops={shops.data?.items || []} />
-
-      {running && (
-        <div className="flex items-center gap-1.5 text-xs text-slate-400">
-          <Spinner /> Analyzing shopper profiles…
-        </div>
-      )}
-
-      {runError && <ErrorBox message={runError} onRetry={runMatching} />}
-
-      {!result && running && (
+      {running && !result && (
         <div className="card">
           <EmptyState title="Analyzing…" hint="AI matching runs automatically whenever you select a shop." />
         </div>
       )}
+      {runError && <ErrorBox message={runError} onRetry={() => runMatching()} />}
 
-      {result && (
+      {/* 2 — what to do next, by state */}
+      {result && staffing && (
+        <StaffingCard
+          staffing={staffing}
+          shopName={selectedShop?.shop_name || result.shop_name}
+          radius={radius}
+          widened={widened}
+          running={running}
+          approving={approving}
+          selectedCount={selected.size}
+          alreadyNames={alreadyList.map((r) => r.name)}
+          moreCount={canShowMore ? moreList.length : 0}
+          showingMore={view === "more"}
+          shopCity={[selectedShop?.city, selectedShop?.state].filter(Boolean).join(", ")}
+          existingBonus={selectedShop?.bonus ?? null}
+          onExpand={() => expandRadius(staffing.next_radius_km ?? undefined)}
+          onAddBonus={() => openBonus(staffing.suggested_bonus)}
+          onApprove={approveAndGoToOutreach}
+          onGoToOutreach={() => navigate(outreachUrl())}
+          onShowMore={() => setView("more")}
+          onShowRecommended={() => setView("recommended")}
+        />
+      )}
+
+      {/* 3 — the shoppers */}
+      {/* Nothing to list when the shop is staffed, or short with nobody found — the card above already says so. */}
+      {result && staffing && (view === "more" || (staffing.state !== "filled" && recommendedList.length > 0)) && (
         <>
-          <div className="card p-5">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              AI understood this requirement as
-            </div>
-            <p className="mt-1.5 text-sm italic text-slate-700 dark:text-slate-200">
-              "{result.requirement_summary}"
-            </p>
-            <div className="mt-3 text-xs text-slate-400">
-              Found {result.total_candidates} candidate shoppers · {result.eligible_count} eligible ·{" "}
-              {result.excluded.unavailable} unavailable · {result.excluded.inactive} inactive
-              {result.excluded.outside_radius ? ` · ${result.excluded.outside_radius} outside ${radius} km radius` : ""}
-              {result.excluded.requirements_not_met ? ` · ${result.excluded.requirements_not_met} don't meet campaign requirements` : ""}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <MiniStat label="Analyzed" value={result.total_candidates} />
-            <MiniStat label="Eligible" value={result.eligible_count} />
-            <MiniStat label="Top" value={result.classification_counts.top_match} accent="text-emerald-600 dark:text-emerald-400" />
-            <MiniStat label="Strong" value={result.classification_counts.strong_match} accent="text-indigo-600 dark:text-indigo-400" />
-            <MiniStat label="Potential" value={result.classification_counts.potential_match} accent="text-amber-600 dark:text-amber-400" />
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Candidate shortlist
-            </div>
-            <div className="flex items-center gap-3">
-              {visible.length > 0 && (
-                <div className="flex gap-2 text-[11px]">
-                  <button
-                    type="button"
-                    className="font-semibold text-brand-600 hover:underline dark:text-brand-400"
-                    onClick={() =>
-                      setSelected(new Set(visible.filter((r: any) => !r.already_invited).map((r: any) => r.shopper_id)))
-                    }
-                  >
-                    Select all
-                  </button>
-                  <button
-                    type="button"
-                    className="font-semibold text-slate-400 hover:underline"
-                    onClick={() => setSelected(new Set())}
-                  >
-                    Deselect all
-                  </button>
-                </div>
-              )}
-              <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-xs font-semibold dark:bg-slate-800">
-                {(["recommended", "more"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    className={
-                      "rounded-md px-3 py-1 " +
-                      (view === mode
-                        ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white"
-                        : "text-slate-500 dark:text-slate-400")
-                    }
-                    onClick={() => setView(mode)}
-                  >
-                    {mode === "recommended"
-                      ? `Recommended (${recommendedList.length})`
-                      : `More candidates (${moreList.length})`}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {view === "recommended" && result.slots_remaining === 0 && (
-            <div className="card border border-emerald-200 p-4 text-sm text-emerald-700 dark:border-emerald-900 dark:text-emerald-300">
-              This shop already has all {required} required shopper(s) selected, so the AI has nothing more to
-              recommend. Need backup shoppers? Open <button className="font-semibold underline" onClick={() => setView("more")}>More candidates</button> and
-              allow over-selection.
-            </div>
-          )}
-
           {view === "more" && (
             <div className="card flex flex-wrap items-center justify-between gap-3 border border-indigo-200 p-4 dark:border-indigo-900">
               <p className="max-w-xl text-sm text-slate-600 dark:text-slate-300">
-                {selectedShop?.shop_name || "This shop"} needs {required} shopper(s) and the AI recommended exactly
-                that many. If it needs more, you can add extra shoppers from this list
-                {shopDetail.data?.allow_over_selection ? " — over-selection is on for this shop." : " once over-selection is on."}
+                {selectedShop?.shop_name || "This shop"} has what it needs ({required}). These are extra shoppers you can add
+                as backups{allowOverSelection ? " — over-selection is on for this shop." : " once over-selection is on."}
               </p>
               <button
-                className={shopDetail.data?.allow_over_selection ? "btn-secondary" : "btn-primary"}
-                onClick={() => toggleOverSelection(!shopDetail.data?.allow_over_selection)}
+                className={allowOverSelection ? "btn-secondary" : "btn-primary"}
+                onClick={() => toggleOverSelection(!allowOverSelection)}
                 disabled={togglingOverSelection}
               >
                 {togglingOverSelection ? <Spinner /> : null}{" "}
-                {shopDetail.data?.allow_over_selection ? "Turn off over-selection" : "Allow over-selection"}
+                {allowOverSelection ? "Turn off over-selection" : "Allow over-selection"}
               </button>
             </div>
           )}
 
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              {view === "more" ? `More candidates (${moreList.length})` : `Recommended shoppers (${recommendedList.length})`}
+            </div>
+            {visible.length > 1 && (
+              <div className="flex gap-2 text-[11px]">
+                <button
+                  type="button"
+                  className="font-semibold text-brand-600 hover:underline dark:text-brand-400"
+                  onClick={() => setSelected(new Set(visible.map((r: any) => r.shopper_id)))}
+                >
+                  Select all
+                </button>
+                <button type="button" className="font-semibold text-slate-400 hover:underline" onClick={() => setSelected(new Set())}>
+                  Deselect all
+                </button>
+              </div>
+            )}
+          </div>
+
           {visible.length === 0 ? (
             <div className="card">
               <EmptyState
-                title={view === "more" ? "No more candidates" : "No candidates found"}
-                hint="Try expanding the search radius or check shopper availability."
+                title={view === "more" ? "No more candidates" : "No shoppers to recommend yet"}
+                hint="Widen the search radius or add a bonus below to reach more shoppers."
               />
             </div>
           ) : (
@@ -752,57 +699,92 @@ function RecommendationsTab({
               ))}
             </div>
           )}
-
-          {selected.size > 0 && (() => {
-            const allowOverSelection = !!shopDetail.data?.allow_over_selection;
-            const alreadySelected = shopDetail.data?.active_selected_count ?? 0;
-            const wouldExceed =
-              !allowOverSelection && required > 0 && alreadySelected + selected.size > required;
-            const remaining = Math.max(0, required - alreadySelected);
-            return (
-              <div className="card sticky bottom-4 flex flex-wrap items-center justify-between gap-3 p-4">
-                <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                  Selected: {selected.size} / {required} required
-                  {alreadySelected > 0 && (
-                    <span className="ml-1 font-normal text-slate-400">
-                      ({alreadySelected} already selected for this shop)
-                    </span>
-                  )}
-                  {wouldExceed && (
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal text-amber-600 dark:text-amber-400">
-                      <span>
-                        Over-selection is off — only {remaining} more can be approved for this shop.
-                      </span>
-                      <button
-                        className="font-semibold underline disabled:opacity-50"
-                        onClick={() => toggleOverSelection(true)}
-                        disabled={togglingOverSelection}
-                      >
-                        Allow over-selection for this shop
-                      </button>
-                    </div>
-                  )}
-                  {allowOverSelection && (
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal text-emerald-600 dark:text-emerald-400">
-                      <span>Over-selection is allowed for this shop.</span>
-                      <button
-                        className="font-semibold underline disabled:opacity-50"
-                        onClick={() => toggleOverSelection(false)}
-                        disabled={togglingOverSelection}
-                      >
-                        Turn off
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <button className="btn-primary" onClick={approveAndGoToOutreach} disabled={approving || wouldExceed}>
-                  {approving ? <Spinner /> : null} Approve &amp; Go to Outreach
-                </button>
-              </div>
-            );
-          })()}
         </>
       )}
+
+      {selected.size > 0 && (() => {
+        const alreadySelected = shopDetail.data?.active_selected_count ?? selectedCount;
+        const wouldExceed = !allowOverSelection && required > 0 && alreadySelected + selected.size > required;
+        const remaining = Math.max(0, required - alreadySelected);
+        return (
+          <div className="card sticky bottom-4 flex flex-wrap items-center justify-between gap-3 p-4">
+            <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+              Selected: {selected.size} / {required} required
+              {alreadySelected > 0 && (
+                <span className="ml-1 font-normal text-slate-400">({alreadySelected} already selected for this shop)</span>
+              )}
+              {wouldExceed && (
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal text-amber-600 dark:text-amber-400">
+                  <span>Over-selection is off — only {remaining} more can be approved for this shop.</span>
+                  <button
+                    className="font-semibold underline disabled:opacity-50"
+                    onClick={() => toggleOverSelection(true)}
+                    disabled={togglingOverSelection}
+                  >
+                    Allow over-selection for this shop
+                  </button>
+                </div>
+              )}
+              {allowOverSelection && (
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-normal text-emerald-600 dark:text-emerald-400">
+                  <span>Over-selection is allowed for this shop.</span>
+                  <button
+                    className="font-semibold underline disabled:opacity-50"
+                    onClick={() => toggleOverSelection(false)}
+                    disabled={togglingOverSelection}
+                  >
+                    Turn off
+                  </button>
+                </div>
+              )}
+            </div>
+            <button className="btn-primary" onClick={approveAndGoToOutreach} disabled={approving || wouldExceed}>
+              {approving ? <Spinner /> : null} Approve &amp; Go to Outreach
+            </button>
+          </div>
+        );
+      })()}
+
+      {/* 4 — how the AI got there (collapsed: not needed to act) */}
+      {result && (
+        <details className="card group p-5">
+          <summary className="cursor-pointer select-none text-sm font-semibold text-slate-800 dark:text-slate-100">
+            How the AI analyzed this shop
+          </summary>
+          <p className="mt-3 text-sm italic text-slate-700 dark:text-slate-200">"{result.requirement_summary}"</p>
+          <div className="mt-2 text-xs text-slate-400">
+            Found {result.total_candidates} candidate shoppers · {result.eligible_count} eligible · {result.excluded.unavailable}{" "}
+            unavailable · {result.excluded.inactive} inactive
+            {result.excluded.outside_radius ? ` · ${result.excluded.outside_radius} outside ${radius} km radius` : ""}
+            {result.excluded.requirements_not_met ? ` · ${result.excluded.requirements_not_met} don't meet campaign requirements` : ""}
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <MiniStat label="Analyzed" value={result.total_candidates} />
+            <MiniStat label="Eligible" value={result.eligible_count} />
+            <MiniStat label="Top" value={result.classification_counts.top_match} accent="text-emerald-600 dark:text-emerald-400" />
+            <MiniStat label="Strong" value={result.classification_counts.strong_match} accent="text-indigo-600 dark:text-indigo-400" />
+            <MiniStat label="Potential" value={result.classification_counts.potential_match} accent="text-amber-600 dark:text-amber-400" />
+          </div>
+        </details>
+      )}
+
+      {/* 5 — the whole campaign at once */}
+      <AutoAssignCard
+        campaignId={campaignId}
+        shops={shops.data?.items || []}
+        onOpenShop={(id) => {
+          setShopId(id);
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }}
+        onAddBonus={(id, suggestion) => {
+          setBonusSuggestion(suggestion ?? null);
+          setBonusShop(shops.data?.items.find((s: any) => s.id === id) ?? null);
+        }}
+        rerunToken={bonusVersion}
+        onApproved={() =>
+          navigate(`/client/outreach?campaign=${campaignId}&type=${campaign.bucket === "upcoming" ? "upcoming" : "active"}&view=approved`)
+        }
+      />
 
       {breakdownFor && <BreakdownModal r={breakdownFor} shopId={shopId} onClose={() => setBreakdownFor(null)} />}
       {profileFor && <ShopperDrawer shopperId={profileFor} onClose={() => setProfileFor(null)} />}
@@ -815,9 +797,244 @@ function RecommendationsTab({
             setBonusShop(null);
             setBonusSuggestion(null);
           }}
-          onSaved={() => shops.reload()}
+          onSaved={() => {
+            shops.reload();
+            setBonusVersion((v) => v + 1);
+            // The recommendation depends on the bonus (a raised one is no longer re-suggested), so refresh it.
+            if (bonusShop?.id === shopId) runMatching();
+          }}
         />
       )}
+    </div>
+  );
+}
+
+function ShopStat({ label, value, accent, hint }: { label: string; value: string | number; accent?: string; hint?: string }) {
+  return (
+    <div className="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+      <div className={classNames("text-base font-bold text-slate-900 dark:text-white", accent)}>{value}</div>
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+      {hint && <div className="text-[10px] font-medium text-indigo-500 dark:text-indigo-400">{hint}</div>}
+    </div>
+  );
+}
+
+// The one card that tells the client what to do next for this shop.
+function StaffingCard({
+  staffing,
+  shopName,
+  radius,
+  widened,
+  running,
+  approving,
+  selectedCount,
+  alreadyNames,
+  moreCount,
+  showingMore,
+  shopCity,
+  existingBonus,
+  onExpand,
+  onAddBonus,
+  onApprove,
+  onGoToOutreach,
+  onShowMore,
+  onShowRecommended,
+}: {
+  staffing: any;
+  shopName: string;
+  radius: number;
+  widened: number;
+  running: boolean;
+  approving: boolean;
+  selectedCount: number;
+  alreadyNames: string[];
+  moreCount: number;
+  showingMore: boolean;
+  shopCity: string;
+  existingBonus: { amount: number; currency: string } | null;
+  onExpand: () => void;
+  onAddBonus: () => void;
+  onApprove: () => void;
+  onGoToOutreach: () => void;
+  onShowMore: () => void;
+  onShowRecommended: () => void;
+}) {
+  const style = STAFFING_STYLE[staffing.state];
+  const bonus = staffing.suggested_bonus;
+  // Widening the radius comes first; the bonus is the next recommendation once that was tried (or can't help).
+  const showBonus = staffing.bonus_recommended && (widened > 0 || !staffing.can_expand_radius);
+
+  return (
+    <div className={classNames("card border p-5", style.card)}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className={classNames("h-2.5 w-2.5 rounded-full", style.dot)} />
+          <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+            {staffing.state === "filled" && `${shopName} is fully staffed — ${staffing.already_selected} of ${staffing.required} selected`}
+            {staffing.state === "ready" &&
+              `AI recommends ${staffing.slots_open} shopper${staffing.slots_open === 1 ? "" : "s"} for ${shopName}`}
+            {staffing.state === "short" &&
+              `AI found ${staffing.recommended} of ${staffing.slots_open} shopper${staffing.slots_open === 1 ? "" : "s"} needed`}
+          </h3>
+        </div>
+        <span className={classNames("rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide", style.pill)}>
+          {style.label}
+        </span>
+      </div>
+
+      {staffing.state === "filled" && (
+        <>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+            {alreadyNames.length > 0 ? `Selected: ${alreadyNames.join(", ")}. ` : ""}Nothing more to recommend — send the
+            invitations from Outreach.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className="btn-primary" onClick={onGoToOutreach}>
+              Go to Outreach →
+            </button>
+            {moreCount > 0 && !showingMore && (
+              <button className="btn-secondary" onClick={onShowMore}>
+                Need backup shoppers? View more candidates ({moreCount})
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      {staffing.state === "ready" && (
+        <>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+            Exactly the {staffing.slots_open} this shop still needs — already ticked below. Approve them and the invitations are
+            ready to send from Outreach.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button className="btn-primary" onClick={onApprove} disabled={approving || selectedCount === 0}>
+              {approving ? <Spinner /> : null} Approve {selectedCount} &amp; Go to Outreach
+            </button>
+            {moreCount > 0 &&
+              (showingMore ? (
+                <button className="btn-secondary" onClick={onShowRecommended}>
+                  ← Back to recommended
+                </button>
+              ) : (
+                <button className="btn-secondary" onClick={onShowMore}>
+                  Need more than {staffing.slots_open}? View more candidates ({moreCount})
+                </button>
+              ))}
+          </div>
+        </>
+      )}
+
+      {staffing.state === "short" && (
+        <>
+          <div className="mt-3 grid grid-cols-4 gap-3 text-sm">
+            <GapFigure label="Required" value={staffing.required} />
+            <GapFigure label="Already selected" value={staffing.already_selected} />
+            <GapFigure label="AI found" value={staffing.recommended} />
+            <GapFigure label="Gap" value={`${staffing.shortfall} shopper(s)`} accent="text-rose-600 dark:text-rose-400" />
+          </div>
+          {staffing.reason && <p className="mt-3 text-sm text-slate-600 dark:text-slate-400">{staffing.reason}</p>}
+
+          <ol className="mt-4 space-y-3">
+            <li className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+              <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">1 · Widen the search</div>
+              {staffing.can_expand_radius ? (
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {staffing.far && staffing.nearest_outside_km != null
+                      ? `The nearest other shoppers are ${Math.round(staffing.nearest_outside_km).toLocaleString()} km away — a long trip for a store visit. Widening to ${staffing.next_radius_km} km reaches them anyway.`
+                      : `Shoppers are just outside ${radius} km — widening to ${staffing.next_radius_km} km reaches them.`}
+                  </p>
+                  <button className="btn-secondary" onClick={onExpand} disabled={running}>
+                    {running ? <Spinner /> : null} Expand to {staffing.next_radius_km} km
+                  </button>
+                </div>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {staffing.nearest_outside_km != null
+                    ? `The nearest other shopper is ${Math.round(staffing.nearest_outside_km).toLocaleString()} km away — too far for a store visit, so widening won't help.`
+                    : "Nobody else matches this shop, so widening the radius would not add anyone."}
+                </p>
+              )}
+            </li>
+
+            <li
+              className={classNames(
+                "rounded-lg border p-3",
+                showBonus
+                  ? "border-indigo-200 bg-indigo-50 dark:border-indigo-900 dark:bg-indigo-950/30"
+                  : "border-slate-200 dark:border-slate-800"
+              )}
+            >
+              <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">2 · Add a bonus to attract shoppers</div>
+              {showBonus && bonus ? (
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                  <p className="max-w-xl text-sm text-indigo-800 dark:text-indigo-300">
+                    🤖{" "}
+                    <span className="font-semibold">
+                      AI recommends {bonus.raises_existing ? "raising the bonus to" : "a"} {fmtMoney(bonus.amount, bonus.currency)}
+                      {bonus.raises_existing ? "" : " bonus"}
+                    </span>{" "}
+                    — {widened > 0 ? `even at ${radius} km the shop is still short` : "the shop is short"}.{" "}
+                    {bonus.fills_gap
+                      ? `It pays for the trip, so shoppers up to ${Math.round(radius + bonus.reach_km).toLocaleString()} km away qualify — enough to fill this shop.`
+                      : "It helps, but on its own it won't reach enough shoppers — widen the radius too."}
+                  </p>
+                  <button className="btn-primary shrink-0" onClick={onAddBonus}>
+                    {bonus.raises_existing ? `Raise Bonus to ${fmtMoney(bonus.amount, bonus.currency)}` : "Add Suggested Bonus"}
+                  </button>
+                </div>
+              ) : existingBonus && (staffing.bonus_maxed || staffing.recruit_locally) ? (
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  A {fmtMoney(existingBonus.amount, existingBonus.currency)} bonus is already set.{" "}
+                  {staffing.bonus_maxed
+                    ? "That is the most the AI would recommend — more money won't add shoppers."
+                    : "There is nobody within visiting distance to tempt, so raising it won't help."}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  If widening the radius still leaves {shopName} short, the AI will recommend a bonus here.
+                </p>
+              )}
+            </li>
+
+            {staffing.recruit_locally && (
+              <li className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900 dark:bg-emerald-950/30">
+                <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                  3 · Recruit shoppers near {shopCity || shopName}
+                </div>
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                  <p className="max-w-xl text-sm text-emerald-800 dark:text-emerald-300">
+                    This shop can only be filled by shoppers who live near it. Post a region-targeted recruitment ad so local
+                    shoppers sign up — they show up here as soon as they do.
+                  </p>
+                  <Link className="btn-primary shrink-0" to="/client/social-media">
+                    Recruit via Social Media
+                  </Link>
+                </div>
+              </li>
+            )}
+          </ol>
+
+          {staffing.recommended > 0 && (
+            <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+              <button className="btn-secondary" onClick={onApprove} disabled={approving || selectedCount === 0}>
+                {approving ? <Spinner /> : null} Approve the {selectedCount} found &amp; Go to Outreach
+              </button>
+              <span className="text-xs text-slate-400">You can start inviting now and keep closing the gap.</span>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function GapFigure({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
+  return (
+    <div>
+      <div className="text-xs text-slate-400">{label}</div>
+      <div className={classNames("font-semibold text-slate-800 dark:text-slate-100", accent)}>{value}</div>
     </div>
   );
 }
@@ -841,7 +1058,8 @@ function BonusModal({
 }) {
   const toast = useToast();
   const existing = shop.bonus;
-  const [amount, setAmount] = useState(existing ? String(existing.amount) : suggestion ? String(suggestion.amount) : "");
+  // A suggestion wins over the saved bonus: when the AI says a bonus is too low, it opens pre-filled with the raise.
+  const [amount, setAmount] = useState(suggestion ? String(suggestion.amount) : existing ? String(existing.amount) : "");
   const [note, setNote] = useState(existing?.note || suggestion?.note || "");
   const [busy, setBusy] = useState(false);
   const awarded = !!existing?.completed_at;
@@ -892,9 +1110,9 @@ function BonusModal({
           </button>
         </div>
 
-        {!existing && suggestion && (
+        {suggestion && !awarded && (
           <p className="mt-2 text-xs font-medium text-indigo-600 dark:text-indigo-400">
-            🤖 Amount and note pre-filled from the AI's suggestion — edit either before saving.
+            🤖 Amount pre-filled from the AI's suggestion — edit it before saving.
           </p>
         )}
         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
@@ -954,7 +1172,23 @@ function BonusModal({
   );
 }
 
-function AutoAssignCard({ campaignId, shops }: { campaignId: string; shops: any[] }) {
+function AutoAssignCard({
+  campaignId,
+  shops,
+  onOpenShop,
+  onAddBonus,
+  onApproved,
+  rerunToken,
+}: {
+  campaignId: string;
+  shops: any[];
+  onOpenShop?: (shopId: string) => void;
+  onAddBonus?: (shopId: string, suggestion: { amount: number; note: string } | null) => void;
+  // Called once every proposed assignment became a real invitation — the page sends the client on to Outreach.
+  onApproved?: () => void;
+  // Bumped by the page after a bonus is saved: the proposal is re-run so the bonus's reach shows up in it.
+  rerunToken?: number;
+}) {
   const toast = useToast();
   const bonusByShopId = useMemo(() => {
     const map = new Map<string, any>();
@@ -979,11 +1213,13 @@ function AutoAssignCard({ campaignId, shops }: { campaignId: string; shops: any[
   // invitations for shops that already succeeded.
   const [approvedShopIds, setApprovedShopIds] = useState<Set<string>>(new Set());
   const [retrying, setRetrying] = useState<string | null>(null);
+  // Radius overrides for shops that came up short and were widened on their own (shop id → km).
+  const [shopRadii, setShopRadii] = useState<Record<string, number>>({});
 
-  async function optimize() {
+  async function optimize(radii: Record<string, number> = shopRadii) {
     setOptimizing(true);
     try {
-      const res = await api.aiOptimizeAssignments(campaignId, radius);
+      const res = await api.aiOptimizeAssignments(campaignId, radius, radii);
       setProposal(res);
       setBlocked({});
       setApprovedShopIds(new Set());
@@ -993,6 +1229,40 @@ function AutoAssignCard({ campaignId, shops }: { campaignId: string; shops: any[
       setOptimizing(false);
     }
   }
+
+  // Widen the given unfilled shops to the radius that reaches their shoppers, then re-run the analysis. With
+  // several rounds it keeps going while that still fills slots: shoppers one shop reaches may already be taken by
+  // another, so the next round looks further, until the campaign is staffed or nobody else is left to reach.
+  async function widenShops(unfilled: any[], rounds = 1) {
+    const radii = { ...shopRadii };
+    let list = unfilled;
+    let lastSlots = proposal ? proposal.unfilled.reduce((n: number, u: any) => n + u.unfilled_slots, 0) : Infinity;
+    setOptimizing(true);
+    try {
+      let res: any = proposal;
+      for (let round = 0; round < rounds; round++) {
+        for (const u of list) if (u.next_radius_km) radii[u.shop_id] = u.next_radius_km;
+        res = await api.aiOptimizeAssignments(campaignId, radius, radii);
+        const slots = res.unfilled.reduce((n: number, u: any) => n + u.unfilled_slots, 0);
+        list = res.unfilled.filter((u: any) => u.can_expand_radius);
+        if (!list.length || slots >= lastSlots) break;
+        lastSlots = slots;
+      }
+      setShopRadii(radii);
+      setProposal(res);
+      setBlocked({});
+      setApprovedShopIds(new Set());
+    } catch (e: any) {
+      toast(e?.message || "Failed to widen the search", "error");
+    } finally {
+      setOptimizing(false);
+    }
+  }
+
+  useEffect(() => {
+    if (rerunToken && proposal) optimize();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rerunToken]);
 
   async function approveAll() {
     if (!proposal) return;
@@ -1031,7 +1301,11 @@ function AutoAssignCard({ campaignId, shops }: { campaignId: string; shops: any[
       } else if (blockedCount) {
         toast(`${blockedCount} shop(s) need over-selection enabled first — see below.`, "error");
       }
-      if (blockedCount === 0) setProposal(null);
+      if (blockedCount === 0) {
+        setProposal(null);
+        // Everything is approved — the next step is emailing those shoppers, so go straight to Outreach.
+        if (totalCreated > 0 || approvedShopIds.size > 0) onApproved?.();
+      }
     } finally {
       setApproving(false);
     }
@@ -1076,7 +1350,7 @@ function AutoAssignCard({ campaignId, shops }: { campaignId: string; shops: any[
               onChange={(e) => setRadiusInput(e.target.value)}
             />
           </div>
-          <button className="btn-secondary" onClick={optimize} disabled={optimizing}>
+          <button className="btn-secondary" onClick={() => optimize()} disabled={optimizing}>
             {optimizing ? <Spinner /> : <IconSparkles width={16} height={16} />}
             {optimizing ? "Analyzing…" : proposal ? "🔄 Re-run Analysis" : "Auto Assign Shoppers"}
           </button>
@@ -1090,6 +1364,20 @@ function AutoAssignCard({ campaignId, shops }: { campaignId: string; shops: any[
             <MiniStat label="Requirement Satisfaction" value={proposal.summary.requirement_satisfaction} accent="text-indigo-600 dark:text-indigo-400" />
             <MiniStat label="Avg Distance (km)" value={proposal.summary.average_distance_km ?? 0} accent="text-slate-700 dark:text-slate-200" />
           </div>
+          {Object.keys(shopRadii).length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span>{Object.keys(shopRadii).length} shop(s) are using a widened radius.</span>
+              <button
+                className="font-semibold text-brand-600 hover:underline dark:text-brand-400"
+                onClick={() => {
+                  setShopRadii({});
+                  optimize({});
+                }}
+              >
+                Reset to {radius} km
+              </button>
+            </div>
+          )}
           <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
             <table className="min-w-full text-sm">
               <thead className="border-b border-slate-100 dark:border-slate-800">
@@ -1131,11 +1419,57 @@ function AutoAssignCard({ campaignId, shops }: { campaignId: string; shops: any[
           </div>
           {proposal.unfilled.length > 0 && (
             <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-              <div className="font-semibold">⚠ {proposal.unfilled.length} shop(s) could not be fully staffed</div>
-              <ul className="mt-1 space-y-0.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-semibold">⚠ {proposal.unfilled.length} shop(s) could not be fully staffed</div>
+                {proposal.unfilled.some((u: any) => u.can_expand_radius) && (
+                  <button
+                    className="rounded-md bg-amber-600 px-2.5 py-1 font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+                    onClick={() => widenShops(proposal.unfilled, 6)}
+                    disabled={optimizing}
+                  >
+                    {optimizing ? "Re-running…" : "Widen all & re-run"}
+                  </button>
+                )}
+              </div>
+              <p className="mt-1 text-[11px] opacity-80">
+                Widen a shop's radius or add a bonus (it pays for the trip, so shoppers further away qualify) and the
+                analysis re-runs with the new shoppers.
+              </p>
+              <ul className="mt-1.5 space-y-1.5">
                 {proposal.unfilled.map((u: any, i: number) => (
-                  <li key={i}>
-                    {u.shop_name}: {u.unfilled_slots} unfilled — {u.reason}
+                  <li key={i} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                    <span>
+                      {u.shop_name}: {u.unfilled_slots} unfilled — {u.reason}
+                      {u.far && u.nearest_outside_km != null && (
+                        <span className="ml-1.5 font-semibold">
+                          · nearest others are {Math.round(u.nearest_outside_km).toLocaleString()} km away (long trip)
+                        </span>
+                      )}
+                      {u.suggested_bonus && (
+                        <span className="ml-1.5 font-semibold">
+                          · 🤖 {u.suggested_bonus.raises_existing ? "raise bonus to" : "suggested bonus"}{" "}
+                          {fmtMoney(u.suggested_bonus.amount, u.suggested_bonus.currency)}
+                          {u.suggested_bonus.fills_gap ? " (reaches enough shoppers)" : ""}
+                        </span>
+                      )}
+                    </span>
+                    <span className="flex flex-wrap gap-3 font-semibold">
+                      {u.can_expand_radius && (
+                        <button className="underline disabled:opacity-50" onClick={() => widenShops([u])} disabled={optimizing}>
+                          Expand to {u.next_radius_km} km
+                        </button>
+                      )}
+                      {onAddBonus && u.suggested_bonus && (
+                        <button className="underline" onClick={() => onAddBonus(u.shop_id, u.suggested_bonus)}>
+                          {u.suggested_bonus.raises_existing ? "Raise bonus" : "Add bonus"}
+                        </button>
+                      )}
+                      {onOpenShop && (
+                        <button className="underline" onClick={() => onOpenShop(u.shop_id)}>
+                          Review shop
+                        </button>
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -1166,15 +1500,6 @@ function AutoAssignCard({ campaignId, shops }: { campaignId: string; shops: any[
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function ContextField({ label, value }: { label: string; value: any }) {
-  return (
-    <div className="card p-3">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
-      <div className="mt-0.5 truncate font-semibold text-slate-800 dark:text-slate-100">{value}</div>
     </div>
   );
 }

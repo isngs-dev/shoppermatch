@@ -11,21 +11,42 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...models import Campaign, Shop, Shopper
+from ...models import Campaign, Shop, ShopBonus, Shopper
 from ..selection import active_invitation_count, active_shopper_ids
 from ..semantic_matching import run_matching
+from ..staffing import effective_radius, gap_options
 
 
-async def optimize_assignments(session: AsyncSession, campaign: Campaign, radius_km: float | None = None) -> dict:
+async def optimize_assignments(
+    session: AsyncSession,
+    campaign: Campaign,
+    radius_km: float | None = None,
+    shop_radii: dict[str, float] | None = None,
+) -> dict:
+    """`shop_radii` overrides the campaign-wide radius for individual shops (widening one shop that came up
+    short shouldn't also widen every other). A shop's bonus extends how far its candidates may live."""
     shops = (await session.execute(select(Shop).where(Shop.campaign_id == campaign.id))).scalars().all()
     shoppers = (await session.execute(select(Shopper))).scalars().all()
+    bonus_by_shop = {
+        b.shop_id: b
+        for b in (await session.execute(select(ShopBonus).where(ShopBonus.campaign_id == campaign.id))).scalars().all()
+    }
+    shop_radii = shop_radii or {}
 
     per_shop_results = []
     eligible_counts: dict[str, int] = {}
+    outside_by_shop: dict[str, list[float]] = {}
+    base_radius: dict[str, float | None] = {}
     for shop in shops:
-        result = run_matching(list(shoppers), shop, campaign, radius_km=radius_km)
+        base = shop_radii.get(str(shop.id), radius_km)
+        base_radius[str(shop.id)] = base
+        bonus = bonus_by_shop.get(shop.id)
+        result = run_matching(
+            list(shoppers), shop, campaign, radius_km=effective_radius(base, bonus.amount if bonus else None)
+        )
         per_shop_results.append((shop, result["recommendations"]))
         eligible_counts[str(shop.id)] = result["eligible_count"]
+        outside_by_shop[str(shop.id)] = result["outside_distances"]
 
     # Hardest-first: fewer eligible candidates means less flexibility later.
     per_shop_results.sort(key=lambda pair: len(pair[1]))
@@ -69,10 +90,26 @@ async def optimize_assignments(session: AsyncSession, campaign: Campaign, radius
                 distances.append(cand["distance_km"])
 
         if len(chosen) < slots_needed:
+            missing = slots_needed - len(chosen)
+            existing = bonus_by_shop.get(shop.id)
+            # Same rule as the AI Recommendations page: widen the radius or add/raise a bonus (each really
+            # changes who's eligible), or recruit locally when the nearest shopper is far.
+            gap = gap_options(
+                shop,
+                base_radius=base_radius[str(shop.id)],
+                bonus=existing,
+                distances=outside_by_shop[str(shop.id)],
+                eligible=eligible_counts.get(str(shop.id), 0),
+                slots_open=slots_needed,
+                shortfall=missing,
+            )
             unfilled.append({
                 "shop_id": str(shop.id),
                 "shop_name": shop.shop_name,
-                "unfilled_slots": slots_needed - len(chosen),
+                "unfilled_slots": missing,
+                "radius_km": base_radius[str(shop.id)],
+                "has_bonus": existing is not None,
+                **gap,
                 # Why: either the candidate pool ran dry (few/no eligible
                 # people for this shop at all) or it was contested (enough
                 # eligible people existed, but this campaign's other shops

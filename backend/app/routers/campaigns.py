@@ -24,6 +24,8 @@ from ..services.audit import record_audit
 from ..services.distribution import DESTINATION_TYPES, destination_name, generate_post_image, regions_for_shops
 from ..services.selection import active_invitation_count, active_shopper_ids, enforce_over_selection, mark_recommended
 from ..services.semantic_matching import MATCHING_WEIGHTS, run_matching
+from ..services.staffing import assess_staffing
+from ..services.staffing import effective_radius as radius_with_bonus
 from ..services.tenancy import enforce_campaign_access
 from ..services.tracking import add_event
 from .invitations import _slug, next_reference
@@ -86,6 +88,16 @@ async def _campaign_shops_with_coverage(session: AsyncSession, campaign_id) -> l
             )
         ).all()
     )
+    # Shoppers still "in play" (a decline frees the slot) — what decides whether a shop is filled or open.
+    selected = dict(
+        (
+            await session.execute(
+                select(Invitation.shop_id, func.count(Invitation.id))
+                .where(Invitation.campaign_id == campaign_id, func.coalesce(Invitation.response, "") != "declined")
+                .group_by(Invitation.shop_id)
+            )
+        ).all()
+    )
     bonus_rows = (
         await session.execute(select(ShopBonus).where(ShopBonus.campaign_id == campaign_id))
     ).scalars().all()
@@ -96,6 +108,8 @@ async def _campaign_shops_with_coverage(session: AsyncSession, campaign_id) -> l
         invited = int(counts.get(s.id, 0))
         ratio = (invited / s.required_shoppers) if s.required_shoppers else 0
         d["invited_shoppers"] = invited
+        d["selected_shoppers"] = int(selected.get(s.id, 0))
+        d["open_slots"] = max(0, (s.required_shoppers or 0) - d["selected_shoppers"])
         d["coverage"] = "healthy" if ratio >= 1 else ("medium" if ratio >= 0.5 else "low")
         items.append(d)
     return items
@@ -510,7 +524,15 @@ async def ai_shop_recommendations(
     shoppers = (await session.execute(select(Shopper))).scalars().all()
     parsed = (campaign.parsed_requirements or {}).get("parsed_fields", {}) if campaign.parsed_requirements else {}
     effective_radius = radius if radius is not None else parsed.get("maximum_distance_km")
-    result = run_matching(list(shoppers), shop, campaign, radius_km=effective_radius, requirements=parsed)
+    # A bonus pays for the trip, so it extends how far the matching looks (services/staffing.py).
+    bonus = await session.scalar(select(ShopBonus).where(ShopBonus.shop_id == shop.id))
+    result = run_matching(
+        list(shoppers),
+        shop,
+        campaign,
+        radius_km=radius_with_bonus(effective_radius, bonus.amount if bonus else None),
+        requirements=parsed,
+    )
 
     # The AI recommends exactly as many shoppers as this shop still needs (required minus those already
     # selected). Everyone else stays visible as an optional extra for the over-selection flow.
@@ -521,6 +543,16 @@ async def ai_shop_recommendations(
     # `limit` never cuts into the recommended set, however many already-invited shoppers rank above it.
     last_recommended = max((i for i, r in enumerate(ranked) if r["recommended"]), default=-1)
     recs = ranked[: max(limit, last_recommended + 1)]
+    staffing = assess_staffing(
+        shop,
+        already_selected=already_selected,
+        recommended=sum(1 for r in ranked if r["recommended"]),
+        eligible_count=result["eligible_count"],
+        outside_radius=(result["excluded"] or {}).get("outside_radius", 0) or 0,
+        radius_km=effective_radius,
+        outside_distances=result.get("outside_distances"),
+        bonus=bonus,
+    )
 
     top_line = (
         f"top match {recs[0]['name']} ({recs[0]['match_score']}%)"
@@ -555,6 +587,8 @@ async def ai_shop_recommendations(
         "slots_remaining": slots_remaining,
         "allow_over_selection": bool(shop.allow_over_selection),
         "recommended_for_shop": sum(1 for r in recs if r["recommended"]),
+        "staffing": staffing,
+        "bonus": shop_bonus_out(bonus),
         "weights": MATCHING_WEIGHTS,
         "requirement_summary": result["requirement_summary"],
         "total_candidates": result["total_candidates"],

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { AttributionBadge } from "../components/Attribution";
-import { InvitationDrawer } from "../components/InvitationDrawer";
 import { IconCursor, IconMail, IconSend, IconTarget, IconX } from "../components/Icons";
 import { Badge, CopyButton, KpiCard, Loading, Spinner, useToast } from "../components/ui";
 import { api } from "../lib/api";
@@ -200,6 +199,9 @@ export function Outreach() {
   const [searchParams] = useSearchParams();
   const preselectedCampaignId = searchParams.get("campaign") || "";
   const preselectedShopId = searchParams.get("shop") || "";
+  // Arriving from "Approve All" in AI Recommendations: show everything that was just approved — every shop that
+  // has approved-but-unsent invitations is selected, and all of those shoppers are listed and ticked.
+  const showApproved = searchParams.get("view") === "approved";
 
   // Active and Upcoming campaigns are fetched together and shown in one
   // list — no manual bucket toggle. Completed campaigns never appear here
@@ -276,15 +278,28 @@ export function Outreach() {
     [campaignId, isMultiShop]
   );
 
-  // Invitations already approved for this shop (e.g. via AI Recommendations)
+  // Invitations already approved for this campaign (e.g. via AI Recommendations)
   // but not yet emailed — folded into the checklist below instead of a
   // separate panel, so there's exactly one place to select/send shoppers.
   // Sending one of these reuses its existing Invitation (see sendBulk)
-  // rather than creating a duplicate.
+  // rather than creating a duplicate. Fetched for the whole campaign (not one
+  // shop) so selecting several shops lists every approved shopper of each.
   const pendingInvitationsApi = useApi(
-    () => (shopId ? api.invitations({ campaign_id: campaignId, shop_id: shopId, status: "created" }) : Promise.resolve({ items: [] })),
-    [campaignId, shopId]
+    () => (campaignId ? api.invitations({ campaign_id: campaignId, status: "created", limit: 1000 }) : Promise.resolve({ items: [] })),
+    [campaignId]
   );
+  // Only those belonging to the shops currently checked (also drops rows left over from a previously chosen campaign).
+  const pendingForSelection = useMemo(
+    () => ((pendingInvitationsApi.data?.items || []) as any[]).filter((inv) => selectedShopIds.has(inv.shop_id)),
+    [pendingInvitationsApi.data, selectedShopIds]
+  );
+  const pendingCountByShop = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const inv of (pendingInvitationsApi.data?.items || []) as any[]) {
+      counts.set(inv.shop_id, (counts.get(inv.shop_id) || 0) + 1);
+    }
+    return counts;
+  }, [pendingInvitationsApi.data]);
 
   const [generating, setGenerating] = useState(false);
   const [generatingAi, setGeneratingAi] = useState(false);
@@ -365,6 +380,9 @@ export function Outreach() {
   // `?campaign=` deep link (e.g. from "Approve & Go to Outreach") over just
   // picking the first campaign.
   useEffect(() => {
+    // Active and Upcoming load separately — wait for both, otherwise whichever answers first (say, only the
+    // upcoming list) would be picked from and the `?campaign=` deep link ignored once the other list arrives.
+    if (campaignsLoading) return;
     if (!allCampaigns.length) {
       if (campaignId) setCampaignId("");
       return;
@@ -373,7 +391,7 @@ export function Outreach() {
     const preselected = preselectedCampaignId ? allCampaigns.find((c) => c.id === preselectedCampaignId) : null;
     setCampaignId(preselected?.id || allCampaigns[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allCampaigns]);
+  }, [allCampaigns, campaignsLoading]);
 
   useEffect(() => {
     if (!campaignId) return;
@@ -385,6 +403,18 @@ export function Outreach() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId]);
+
+  // Coming from "Approve All": select every shop that has approved invitations waiting, once per campaign.
+  const approvedAppliedFor = useRef("");
+  useEffect(() => {
+    if (!showApproved || preselectedShopId || !campaignId || !shops.length || !pendingInvitationsApi.data) return;
+    if (approvedAppliedFor.current === campaignId) return;
+    const withPending = new Set(((pendingInvitationsApi.data.items || []) as any[]).map((inv) => inv.shop_id));
+    const ids = shops.filter((s: any) => withPending.has(s.id)).map((s: any) => s.id);
+    if (!ids.length) return;
+    approvedAppliedFor.current = campaignId;
+    setSelectedShopIds(new Set(ids));
+  }, [showApproved, preselectedShopId, campaignId, shops, pendingInvitationsApi.data]);
 
   // Force a fresh top-candidate pick whenever the shop changes (campaign
   // switch or a direct dropdown pick) — otherwise a shopper who's merely a
@@ -531,29 +561,49 @@ export function Outreach() {
   // invitation is ever left invisible/unsendable from this checklist.
   const pendingByShopperId = useMemo(() => {
     const map = new Map<string, { id: string; reference: string }>();
-    for (const inv of (pendingInvitationsApi.data?.items || []) as any[]) {
+    for (const inv of pendingForSelection) {
       if (inv.shopper_id) map.set(inv.shopper_id, { id: inv.id, reference: inv.reference });
     }
     return map;
-  }, [pendingInvitationsApi.data]);
+  }, [pendingForSelection]);
 
   const shopperOptions = useMemo((): ShopperOption[] => {
     if (isMultiShop) {
-      const proposals = (combinedRecs.data?.proposals || []) as any[];
-      return proposals
-        .filter((p) => selectedShopIds.has(p.shop_id))
-        .map(
-          (p): ShopperOption => ({
-            id: p.shopper_id,
-            name: p.shopper_name,
-            city: null,
-            availability_status: null,
-            match_score: p.match_score ?? null,
-            classification: null,
-            shopId: p.shop_id,
-            shopName: p.shop_name,
-          })
-        );
+      // Everyone already approved for the checked shops comes first (that is what "Approve All" produced); the
+      // optimizer's fresh proposals are added after them for shops that still have open slots.
+      const options: ShopperOption[] = [];
+      const seen = new Set<string>();
+      for (const inv of pendingForSelection) {
+        if (!inv.shopper_id || seen.has(inv.shopper_id)) continue;
+        seen.add(inv.shopper_id);
+        options.push({
+          id: inv.shopper_id,
+          name: inv.shopper_name || inv.shopper_email,
+          city: null,
+          availability_status: null,
+          match_score: null,
+          classification: null,
+          shopId: inv.shop_id,
+          shopName: inv.shop_name,
+          pendingInvitationId: inv.id,
+          pendingReference: inv.reference,
+        });
+      }
+      for (const p of (combinedRecs.data?.proposals || []) as any[]) {
+        if (!selectedShopIds.has(p.shop_id) || seen.has(p.shopper_id)) continue;
+        seen.add(p.shopper_id);
+        options.push({
+          id: p.shopper_id,
+          name: p.shopper_name,
+          city: null,
+          availability_status: null,
+          match_score: p.match_score ?? null,
+          classification: null,
+          shopId: p.shop_id,
+          shopName: p.shop_name,
+        });
+      }
+      return options;
     }
 
     const withPending = (list: ShopperOption[]): ShopperOption[] => {
@@ -562,7 +612,7 @@ export function Outreach() {
         const pending = pendingByShopperId.get(o.id);
         return pending ? { ...o, pendingInvitationId: pending.id, pendingReference: pending.reference } : o;
       });
-      for (const inv of (pendingInvitationsApi.data?.items || []) as any[]) {
+      for (const inv of pendingForSelection) {
         if (!inv.shopper_id || seen.has(inv.shopper_id)) continue;
         merged.push({
           id: inv.shopper_id,
@@ -606,7 +656,7 @@ export function Outreach() {
         })
       )
     );
-  }, [isMultiShop, combinedRecs.data, selectedShopIds, recs.data, shoppers.data, pendingByShopperId, pendingInvitationsApi.data]);
+  }, [isMultiShop, combinedRecs.data, selectedShopIds, recs.data, shoppers.data, pendingByShopperId, pendingForSelection]);
 
   // Shop-level bonus lookup (see AI Recommendations' Add Bonus / AI-suggested
   // bonus) — surfaced here too so the client still sees which shoppers are
@@ -660,7 +710,7 @@ export function Outreach() {
     const topPicks = required > 0 ? shopperOptions.slice(0, required).map((s) => s.id) : [];
     setBulkSelected(new Set([...topPicks, ...pendingIds]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recs.data, combinedRecs.data, pendingInvitationsApi.data]);
+  }, [recs.data, combinedRecs.data, pendingInvitationsApi.data, selectedShopIds]);
 
   const selectedShopper = useMemo(
     () => shopperOptions.find((s) => s.id === shopperId),
@@ -960,6 +1010,14 @@ export function Outreach() {
   return (
     <div className="space-y-6">
       <div>
+        {campaignId && (
+          <Link
+            to={`/client/campaigns/${campaignId}?tab=recommendations${shopId ? `&shop=${shopId}` : ""}`}
+            className="mb-2 inline-block text-sm font-medium text-brand-600 hover:underline dark:text-brand-400"
+          >
+            ← Back to AI Recommendations
+          </Link>
+        )}
         <h1 className="text-xl font-bold text-slate-900 dark:text-white">Outreach</h1>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           Send invitations to AI-recommended shoppers and track responses in real time.
@@ -1049,6 +1107,14 @@ export function Outreach() {
                         <span className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">
                           {s.shop_name} — {s.city}
                         </span>
+                        {pendingCountByShop.get(s.id) ? (
+                          <span
+                            className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"
+                            title="Approved in AI Recommendations, waiting to be emailed"
+                          >
+                            {pendingCountByShop.get(s.id)} approved
+                          </span>
+                        ) : null}
                         <span className="shrink-0 text-xs text-slate-400">requires {s.required_shoppers}</span>
                       </label>
                     ))}
@@ -1056,8 +1122,8 @@ export function Outreach() {
                 )}
                 {isMultiShop && (
                   <p className="mt-1 text-[11px] text-slate-400">
-                    AI Recommendations below combines all {selectedShopIds.size} shops — the same shopper is never
-                    proposed for two of them, and each shop's own required count is respected.
+                    Everyone already approved for these {selectedShopIds.size} shops is listed and ticked below, plus the
+                    AI's picks for any shop that still has open slots — the same shopper is never proposed for two shops.
                   </p>
                 )}
               </div>
@@ -1067,7 +1133,8 @@ export function Outreach() {
                   Shopper(s) {campaignType === "upcoming" ? "(recommended candidates)" : "(AI recommended)"} —{" "}
                   {bulkSelected.size} selected
                 </label>
-                {(shopId && recs.loading && !recs.data) || (isMultiShop && combinedRecs.loading && !combinedRecs.data) ? (
+                {(shopId && recs.loading && !recs.data) ||
+                (isMultiShop && combinedRecs.loading && !combinedRecs.data && !shopperOptions.length) ? (
                   <div className="input flex items-center text-sm text-slate-400">
                     <Spinner className="mr-2 h-4 w-4" /> AI is matching shoppers…
                   </div>
@@ -1419,8 +1486,6 @@ export function Outreach() {
         </div>
       </div>
 
-      <RecentEmails campaignId={campaignId} />
-
       {showSendConfirm && result && (
         <ConfirmModal
           title="Send Invitation?"
@@ -1630,79 +1695,6 @@ function ConfirmModal({
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-function RecentEmails({ campaignId }: { campaignId: string }) {
-  const { data, loading, reload } = useApi(() => api.invitations({ campaign_id: campaignId || undefined, limit: 15 }), [campaignId]);
-
-  useEffect(() => {
-    const id = window.setInterval(reload, 6000);
-    return () => window.clearInterval(id);
-  }, [reload]);
-
-  const [selected, setSelected] = useState<string | null>(null);
-
-  return (
-    <div className="card">
-      <div className="flex items-center justify-between border-b border-slate-100 p-4 dark:border-slate-800">
-        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Recent Emails</h2>
-        <span className="text-[11px] text-slate-400">Live: refreshes every 6s · click a row for the full timeline</span>
-      </div>
-      {loading && !data ? (
-        <Loading label="Loading recent emails…" />
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full">
-            <thead className="border-b border-slate-100 dark:border-slate-800">
-              <tr>
-                <th className="th">Shopper</th>
-                <th className="th">Campaign</th>
-                <th className="th hidden md:table-cell">Subject</th>
-                <th className="th hidden lg:table-cell">Sent At</th>
-                <th className="th text-center">Opened</th>
-                <th className="th text-center">Clicked</th>
-                <th className="th text-center">Visited</th>
-                <th className="th hidden lg:table-cell">Source</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
-              {(data?.items || []).map((r: any) => (
-                <tr
-                  key={r.id}
-                  className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40"
-                  onClick={() => setSelected(r.id)}
-                >
-                  <td className="td font-medium text-slate-800 dark:text-slate-100">
-                    {r.shopper_name}
-                    <div className="text-[11px] font-normal text-slate-400">{r.reference}</div>
-                  </td>
-                  <td className="td">{r.campaign_name}</td>
-                  <td className="td hidden max-w-[220px] truncate text-slate-500 md:table-cell">{r.subject}</td>
-                  <td className="td hidden text-slate-500 lg:table-cell">{r.sent_at ? fmtDateTime(r.sent_at) : "—"}</td>
-                  <td className="td text-center">{r.opened_at ? "✓" : "—"}</td>
-                  <td className="td text-center">{r.clicked_at ? "✓" : "—"}</td>
-                  <td className="td text-center">{r.visited_at ? "✓" : "—"}</td>
-                  <td className="td hidden lg:table-cell">
-                    <span className="badge bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300">
-                      ISN Email
-                    </span>
-                  </td>
-                </tr>
-              ))}
-              {(!data || data.items.length === 0) && (
-                <tr>
-                  <td colSpan={8} className="td py-10 text-center text-slate-400">
-                    No emails yet — generate and send an invitation above.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {selected && <InvitationDrawer invitationId={selected} onClose={() => setSelected(null)} />}
     </div>
   );
 }

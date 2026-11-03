@@ -161,15 +161,23 @@ async def campaign_performance_endpoint(
 # --------------------------------------------------------------------------- #
 # D. Assignment Optimization (proposal only — never auto-assigns)
 # --------------------------------------------------------------------------- #
+class OptimizeRequest(BaseModel):
+    # Per-shop radius (km) overrides, keyed by shop id — used when one shop was widened after coming up short.
+    shop_radii: dict[str, float] = Field(default_factory=dict)
+
+
 @router.post("/campaigns/{campaign_id}/optimize-assignments")
 async def optimize_assignments_endpoint(
     campaign_id: uuid.UUID,
     radius_km: float | None = Query(default=None, gt=0),
+    body: OptimizeRequest | None = None,
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_operator),
 ):
     campaign = enforce_campaign_access(await session.get(Campaign, campaign_id), user)
-    result = await assignment_optimizer.optimize_assignments(session, campaign, radius_km=radius_km)
+    result = await assignment_optimizer.optimize_assignments(
+        session, campaign, radius_km=radius_km, shop_radii=(body.shop_radii if body else None)
+    )
     await record_audit(
         session,
         action="ai.assignment_optimization_generated",
