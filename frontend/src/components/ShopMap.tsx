@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
-import { MapContainer, Marker, Popup, TileLayer } from "react-leaflet";
+import { MapContainer, Marker, Popup, TileLayer, Tooltip } from "react-leaflet";
 import { IconX } from "./Icons";
 import { Badge, Loading } from "./ui";
 import { api } from "../lib/api";
@@ -58,15 +58,75 @@ function shopIcon(coverage: string) {
 function shopperIcon(rank: number) {
   // Top 3 candidates stand out in brand purple; the rest are a quieter dot
   // — signals "these are the shoppers to contact first", not just "nearby".
+  // The dot sits in a larger transparent box so it is easy to hover, not just a few pixels wide.
   const color = rank <= 3 ? "#6366f1" : "#94a3b8";
   const size = rank <= 3 ? 11 : 8;
+  const box = 22;
   return L.divIcon({
     className: "",
-    html: `<div style="width:${size}px;height:${size}px;border-radius:9999px;background:${color};border:1.5px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4)"></div>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
+    html: `<div style="width:${box}px;height:${box}px;display:flex;align-items:center;justify-content:center;cursor:pointer"><div style="width:${size}px;height:${size}px;border-radius:9999px;background:${color};border:1.5px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4)"></div></div>`,
+    iconSize: [box, box],
+    iconAnchor: [box / 2, box / 2],
     popupAnchor: [0, -size / 2],
   });
+}
+
+// Hover shows the details (a Tooltip); click still opens the Popup, which is where the actions live. While a
+// popup is open its tooltip is hidden, so the two never stack on top of each other.
+const hoverHandlers = {
+  popupopen: (e: L.LeafletEvent) => (e.target as L.Marker).closeTooltip(),
+  mouseover: (e: L.LeafletEvent) => {
+    const marker = e.target as L.Marker;
+    if (marker.isPopupOpen()) window.setTimeout(() => marker.closeTooltip(), 0);
+  },
+};
+
+function ShopInfo({ s }: { s: any }) {
+  return (
+    <div className="min-w-[200px] text-sm">
+      <div className="font-bold text-slate-900">{s.shop_name}</div>
+      <div className="text-xs text-slate-500">{[s.city, s.state].filter(Boolean).join(", ") || "—"}</div>
+      <div className="mt-1 text-xs">
+        Status: <span className="font-semibold">{s.status}</span>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
+        <div>
+          Required: <span className="font-semibold">{s.required_shoppers}</span>
+        </div>
+        <div>
+          Available: <span className="font-semibold">{s.available_shoppers}</span>
+        </div>
+        <div>
+          Invited: <span className="font-semibold">{s.invited_shoppers}</span>
+        </div>
+        <div>
+          Accepted: <span className="font-semibold">{s.accepted_shoppers}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShopperInfo({ r, rank, shopName }: { r: any; rank: number; shopName: string }) {
+  return (
+    <div className="min-w-[180px] text-sm">
+      <div className="font-bold text-slate-900">
+        {rank}. {r.name}
+      </div>
+      <div className="text-xs text-slate-500">For {shopName}</div>
+      <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
+        <div>
+          Match: <span className="font-semibold">{r.match_score}%</span>
+        </div>
+        <div>
+          Distance: <span className="font-semibold">{r.distance_km != null ? `${r.distance_km} km` : "—"}</span>
+        </div>
+        <div className="col-span-2">
+          Availability: <span className="font-semibold capitalize">{r.availability || "—"}</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const US_CENTER: [number, number] = [39.8283, -98.5795];
@@ -154,37 +214,21 @@ export function CampaignMapTab({
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
             {located.map((s) => (
-              <Marker key={s.id} position={[s.latitude, s.longitude]} icon={shopIcon(s.coverage)}>
+              <Marker
+                key={s.id}
+                position={[s.latitude, s.longitude]}
+                icon={shopIcon(s.coverage)}
+                eventHandlers={hoverHandlers}
+              >
+                <Tooltip direction="top" offset={[0, -12]} opacity={1}>
+                  <ShopInfo s={s} />
+                  <div className="mt-1 text-[10px] text-slate-400">Click for actions</div>
+                </Tooltip>
                 <Popup>
-                  <div className="min-w-[200px] text-sm">
-                    <div className="font-bold text-slate-900">{s.shop_name}</div>
-                    <div className="text-xs text-slate-500">
-                      {[s.city, s.state].filter(Boolean).join(", ") || "—"}
-                    </div>
-                    <div className="mt-1 text-xs">
-                      Status: <span className="font-semibold">{s.status}</span>
-                    </div>
-                    <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
-                      <div>
-                        Required: <span className="font-semibold">{s.required_shoppers}</span>
-                      </div>
-                      <div>
-                        Available: <span className="font-semibold">{s.available_shoppers}</span>
-                      </div>
-                      <div>
-                        Invited: <span className="font-semibold">{s.invited_shoppers}</span>
-                      </div>
-                      <div>
-                        Accepted: <span className="font-semibold">{s.accepted_shoppers}</span>
-                      </div>
-                    </div>
-                    <button
-                      className="btn-primary mt-2.5 w-full !py-1.5 text-xs"
-                      onClick={() => openShop(s.id)}
-                    >
-                      View Shop
-                    </button>
-                  </div>
+                  <ShopInfo s={s} />
+                  <button className="btn-primary mt-2.5 w-full !py-1.5 text-xs" onClick={() => openShop(s.id)}>
+                    View Shop
+                  </button>
                 </Popup>
               </Marker>
             ))}
@@ -217,25 +261,17 @@ function ShopperMarkers({ campaignId, shop }: { campaignId: string; shop: any })
   return (
     <>
       {located.map((r, i) => (
-        <Marker key={r.shopper_id} position={[r.latitude, r.longitude]} icon={shopperIcon(i + 1)}>
+        <Marker
+          key={r.shopper_id}
+          position={[r.latitude, r.longitude]}
+          icon={shopperIcon(i + 1)}
+          eventHandlers={hoverHandlers}
+        >
+          <Tooltip direction="top" offset={[0, -8]} opacity={1}>
+            <ShopperInfo r={r} rank={i + 1} shopName={shop.shop_name} />
+          </Tooltip>
           <Popup>
-            <div className="min-w-[180px] text-sm">
-              <div className="font-bold text-slate-900">
-                {i + 1}. {r.name}
-              </div>
-              <div className="text-xs text-slate-500">For {shop.shop_name}</div>
-              <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
-                <div>
-                  Match: <span className="font-semibold">{r.match_score}%</span>
-                </div>
-                <div>
-                  Distance: <span className="font-semibold">{r.distance_km != null ? `${r.distance_km} km` : "—"}</span>
-                </div>
-                <div className="col-span-2">
-                  Availability: <span className="font-semibold capitalize">{r.availability || "—"}</span>
-                </div>
-              </div>
-            </div>
+            <ShopperInfo r={r} rank={i + 1} shopName={shop.shop_name} />
           </Popup>
         </Marker>
       ))}
