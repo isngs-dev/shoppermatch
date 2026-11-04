@@ -73,6 +73,7 @@ _CLIENT_PREFIXES = (
     "/api/reports",
     "/api/insights",
     "/api/ai",
+    "/api/autopilot",
     "/api/notifications",
 )
 
@@ -86,6 +87,12 @@ _HIGH_IMPACT = [
      "This places REAL phone calls to real numbers (it costs money)."),
     (re.compile(r"^/api/social/posts/\{[^/]+\}/(publish|schedule)$|^/api/campaigns/\{[^/]+\}/distribution/post$"),
      "This publishes to the client's connected social accounts."),
+    (re.compile(r"^/api/autopilot/campaigns/\{[^/]+\}/run$"),
+     "This runs AI Autopilot now: it creates invitations, may set shop bonuses (a pledge the client pays) and, in "
+     "Automatic mode, emails real shoppers. With dry_run true it only previews and changes nothing."),
+    (re.compile(r"^/api/autopilot/(campaigns/\{[^/]+\}|defaults)$"),
+     "This changes AI Autopilot settings. In Review mode it prepares invitations on a schedule; in Automatic mode it "
+     "emails shoppers on its own, so only confirm if the user clearly wants that."),
 ]
 
 _catalog_cache: dict[tuple[str, str], dict] | None = None

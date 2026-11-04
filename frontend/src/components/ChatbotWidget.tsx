@@ -18,36 +18,36 @@ const COPY: Record<Audience, { title: string; greeting: string; suggestions: str
   staff: {
     title: "ShopperMatch Assistant",
     greeting:
-      "Hi! I can answer questions from your live data and do the work for you on any page: campaigns, outreach, email automation, voice calls, templates, social posts and reports. I always ask you to confirm before I send, call, publish or change anything.",
+      "Hi! Ask me anything about ShopperMatch: how a page or an AI feature works, how to do something step by step, or what is happening in your campaigns. I can also do the work for you on any page (outreach, email automation, voice calls, templates, social posts, reports). I always ask you to confirm before I send, call, publish or change anything.",
     suggestions: [
       "How is outreach performing?",
       "Which shops still need shoppers?",
-      "Create an email template for a reminder",
-      "Can someone call me back?",
+      "How does AI Autopilot work?",
+      "What can you help me with?",
     ],
     placeholder: "Ask me a question or give me a task…",
   },
   shopper: {
     title: "Assignment Assistant",
     greeting:
-      "Hi! I'm your ShopperMatch assistant. Ask me about this campaign, your eligibility, shops and dates, or the visit instructions.",
+      "Hi! I'm your ShopperMatch assistant. Ask me about this campaign, your eligibility, shops and dates, the visit instructions, how matching and pay work, or anything about this website.",
     suggestions: [
       "Tell me about this campaign",
       "Am I eligible?",
       "Which shops are available?",
-      "I have a question for a person",
+      "How am I matched and paid?",
     ],
     placeholder: "Ask about this assignment…",
   },
   visitor: {
     title: "ShopperMatch Assistant",
     greeting:
-      "Hi! \u{1F44B} Main Maya hoon, ShopperMatch ka AI assistant. Main campaign ke baare mein general sawaalon ka jawab de sakti hoon. Apni shop details ya status dekhne ke liye, apne email/SMS mein aaye personal link se chat kholiye.",
+      "Hi! \u{1F44B} Main Maya hoon, ShopperMatch ka AI assistant. Aap mujhse is website ya platform ke baare mein kuch bhi pooch sakte hain: ye kya hai, kaise kaam karta hai, sign in ya account kaise banayein, mystery shopping kya hoti hai. (Your own assignment details are available when you open the chat from your personal invitation link.)",
     suggestions: [
+      "What is ShopperMatch.AI?",
+      "How do I create an account?",
+      "How does tracking work?",
       "What is mystery shopping?",
-      "How do invitations work?",
-      "Are there open shops right now?",
-      "Can someone contact me?",
     ],
     placeholder: "Ask a question…",
   },

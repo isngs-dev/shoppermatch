@@ -322,7 +322,7 @@ hides itself when `GET /api/chatbot/status` reports `available: false`.
 |---|---|---|
 | ISN admin / client user | `POST /api/chatbot/staff/message` (bearer) | An operations agent that can do **anything the signed-in user can do on any page** (campaigns, shops, outreach/invitations, email automation, bulk voice calls, templates, social posts, reports, profile) and answer from live data. It also has quick read tools (campaigns, funnel, coverage gaps, recent activity), `navigate` (page buttons) and `request_callback`. |
 | Shopper | `POST /api/chatbot/shopper/{tracking_token}/message` (+ `GET .../greeting`) | The campaign assistant ("Maya", Hindi/English/Hinglish) from the *Agentic Campaign Assistant* spec, bound to that one invitation. Read tools: campaign details, grounded search over the campaign + shops + FAQ, available shops (max 5, with bookable dates), shop status, own context, eligibility (matched/unmatched criteria), form guide. Write tools: record interest in a shop/date, accept/decline/maybe, reschedule/cancel request, schedule a reminder, opt-out, escalate to a coordinator, log activity. |
-| Visitor | `POST /api/chatbot/visitor/message` | Answers only from `services/chatbot/knowledge.py`, anonymous open-shop counts, and a callback request that stores contact details **only with explicit consent**. |
+| Visitor | `POST /api/chatbot/visitor/message` | An all-round guide to the website and platform (what it is, pages, sign-in/sign-up, how it works, tracking, privacy, technology), answered from the knowledge base; anonymous open-shop counts; and a callback request that stores contact details **only with explicit consent** (only offered when the visitor asks for a person). |
 
 **Staff agent: how it can do everything safely** (`services/chatbot/api_tools.py`)
 
@@ -362,8 +362,20 @@ hides itself when `GET /api/chatbot/status` reports `available: false`.
 - Settings: `CHATBOT_ASSISTANT_NAME`, `CHATBOT_MODE`, `CHATBOT_COORDINATOR_SLA`, `CHATBOT_COMPLEX_MODEL` (optional larger
   model used for complaints / long conversations).
 
-Rules carried over from the marketing_chatbot platform: answer only from tools/knowledge (a lookup with no match
-makes the bot say so and, after 2 misses or 8 turns, offer a human callback); consent before storing contact
+**Knowledge base (all-rounder).** The assistant answers questions about the project and the website without human
+support. Its knowledge is a set of markdown guides in `backend/app/knowledge/` (website, shopper, client portal,
+AI features, concepts, how-tos, troubleshooting, admin, plus the project's reference docs in `reference/`); every
+`##` section is one chunk and a `<!-- audiences: visitor, shopper, staff, admin -->` comment at the top of a file
+says who may be told it (client users never get the admin-only guide or reference docs; visitors and shoppers never
+get the staff guides). Retrieval is BM25 with light stemming, a synonym table and Hindi/Hinglish filler words
+ignored. On **every** message the best sections are searched automatically and placed in the model's prompt (so
+grounding never depends on the model remembering to call a tool), and the `search_knowledge` tool is there for
+follow-ups. A miss never ends in "ask a human": the search returns the closest topics and the agent retries with other
+keywords; a person is offered only when the user asks for one (shoppers keep the coordinator escalation for things only
+a person can do, such as a specific unpaid assignment). Questions unrelated to ShopperMatch, the website or mystery
+shopping are politely declined.
+
+Rules carried over from the marketing_chatbot platform: answer only from tools/knowledge; consent before storing contact
 details; fail explicitly (503 not configured / 502 upstream) rather than fake an answer. Public conversations are
 resumable only with the `session_key` returned at creation; chats and every tool call are stored
 (`chat_conversations`, `chat_messages`, migration `0021_chatbot`) and admins can review them at
@@ -371,7 +383,9 @@ resumable only with the `session_key` returned at creation; chats and every tool
 
 Code: `backend/app/services/chatbot/` (`agent.py` loop, `tools.py` per-audience tools, `knowledge.py` facts),
 `backend/app/routers/chatbot.py`, tests in `backend/tests/test_chatbot.py` (OpenAI mocked at one seam).
-To teach it more facts, add entries to `knowledge.py` (keep them true; pay figures and dates stay in the DB).
+To teach it more, add a `##` section to the right guide in `backend/app/knowledge/` (keep it true; pay figures and dates
+stay in the DB, and never put secrets in a guide: a test checks for that). `tests/test_chatbot_knowledge.py` holds ~50
+real questions per audience (English and Hinglish) that must each find their answer.
 
 ## Acceptance test
 

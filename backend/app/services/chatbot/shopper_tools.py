@@ -262,8 +262,9 @@ async def _search_campaign_knowledge(session: AsyncSession, scope: ChatScope, ar
         conv.unanswered_count = (conv.unanswered_count or 0) + 1
         return {
             "status": "no_match",
-            "instruction": "Nothing grounded was found. Do not guess: ask ONE clarifying question, and if still unsure "
-            "escalate with reason low_confidence.",
+            "instruction": "Nothing grounded was found. Do not guess: search once more with different English keywords, "
+            "then ask ONE clarifying question; escalate with reason low_confidence only when it needs a person (for "
+            "example a specific payment problem), not for a general question about the product or website.",
         }
     conv.unanswered_count = 0
     return {"status": "ok", "facts": facts}

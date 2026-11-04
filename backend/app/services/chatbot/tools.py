@@ -99,17 +99,46 @@ def _funnel_dict(row) -> dict:
 # --------------------------------------------------------------------------- #
 # Staff tools (read-only)
 # --------------------------------------------------------------------------- #
-async def _list_campaigns(session: AsyncSession, scope: ChatScope, args: dict) -> dict:
-    status = (args.get("status") or "").strip().lower() or None
+# The app files a campaign under active / upcoming / completed by its free-text status (routers/campaigns.py::
+# status_bucket): "draft" and "scheduled" are upcoming, "in_progress" / "filled" are active, and so on. The assistant
+# filters the same way, so "active" really means every live campaign, not just the ones literally named "active".
+_UPCOMING_STATUSES = ("draft", "upcoming", "scheduled")
+_COMPLETED_STATUSES = ("completed",)
+_CANCELLED_STATUSES = ("cancelled",)
+
+
+def _campaign_query(scope: ChatScope, status: str | None, name: str | None):
     stmt = select(Campaign)
     crit = _campaign_filter(scope)
     if crit is not None:
         stmt = stmt.where(crit)
-    if status:
-        stmt = stmt.where(Campaign.status == status)
-    stmt = stmt.order_by(Campaign.created_at.desc()).limit(MAX_ROWS)
-    rows = (await session.execute(stmt)).scalars().all()
-    return {
+    lowered = func.lower(Campaign.status)
+    if status == "upcoming":
+        stmt = stmt.where(lowered.in_(_UPCOMING_STATUSES))
+    elif status == "completed":
+        stmt = stmt.where(lowered.in_(_COMPLETED_STATUSES))
+    elif status == "active":
+        stmt = stmt.where(lowered.notin_(_UPCOMING_STATUSES + _COMPLETED_STATUSES + _CANCELLED_STATUSES))
+    if name:
+        stmt = stmt.where(Campaign.name.ilike(f"%{name}%"))
+    return stmt
+
+
+async def _list_campaigns(session: AsyncSession, scope: ChatScope, args: dict) -> dict:
+    status = (args.get("status") or "").strip().lower() or None
+    name = (args.get("name") or "").strip() or None
+    note = None
+    stmt = _campaign_query(scope, status, name)
+    total = await session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    if not total and status and name:
+        # Asked for one campaign by name under the wrong status (the status is easy to guess wrong): look again
+        # without it rather than let the assistant conclude the campaign doesn't exist.
+        stmt = _campaign_query(scope, None, name)
+        total = await session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+        if total:
+            note = f"Nothing matched status '{status}'; these matches are in other statuses (see each one's status)."
+    rows = (await session.execute(stmt.order_by(Campaign.created_at.desc()).limit(MAX_ROWS))).scalars().all()
+    out = {
         "campaigns": [
             {
                 "id": str(c.id),
@@ -124,7 +153,12 @@ async def _list_campaigns(session: AsyncSession, scope: ChatScope, args: dict) -
             for c in rows
         ],
         "shown": len(rows),
+        # More may match than are shown: narrow with `name` (part of the campaign name) rather than assume it is missing.
+        "total_matching": total,
     }
+    if note:
+        out["note"] = note
+    return out
 
 
 async def _campaign_overview(session: AsyncSession, scope: ChatScope, args: dict) -> dict:
@@ -487,7 +521,7 @@ async def _navigate(session: AsyncSession, scope: ChatScope, args: dict) -> dict
 # Shared + shopper + visitor tools
 # --------------------------------------------------------------------------- #
 async def _search_knowledge(session: AsyncSession, scope: ChatScope, args: dict) -> dict:
-    result = knowledge.search(str(args.get("query") or ""), scope.audience)
+    result = knowledge.search(str(args.get("query") or ""), scope.audience, admin=scope.is_admin)
     conv = scope.conversation
     if result["status"] == "no_match":
         conv.unanswered_count = (conv.unanswered_count or 0) + 1
@@ -567,16 +601,29 @@ async def _open_opportunities(session: AsyncSession, scope: ChatScope, args: dic
 # --------------------------------------------------------------------------- #
 _KNOWLEDGE_SPEC = _spec(
     "search_knowledge",
-    "Look up verified facts about ShopperMatch / ISN / mystery shopping. Use before answering any general question. "
-    "If it returns no_match you must say you don't know and offer a human callback.",
-    {"query": {"type": "string"}},
+    "Search the product and website knowledge base: what ShopperMatch is, every page and feature, how to do things step "
+    "by step, the AI features (matching, recommendations, bonus, Autopilot, voice, emails), tracking, settings, "
+    "troubleshooting, and for shoppers how invitations, pay and privacy work. Call it for ANY question about the product "
+    "or website before answering. Query in short ENGLISH keywords (translate Hindi/Hinglish). If the result is weak or "
+    "no_match, search again with different keywords or use the topics/related titles it returns, up to three tries, "
+    "before saying you don't know. Quote only what it returns.",
+    {"query": {"type": "string", "description": "A few English keywords, e.g. 'autopilot modes' or 'reset password'"}},
     ["query"],
 )
 _CAMPAIGN_NAME = {"campaign_name": {"type": "string", "description": "Campaign name or part of it."}}
 
 _STAFF_TOOLS: dict[str, tuple[dict, ToolHandler]] = {
     "list_campaigns": (
-        _spec("list_campaigns", "List campaigns you can access with progress.", {"status": {"type": "string", "enum": ["active", "upcoming", "completed"]}}),
+        _spec(
+            "list_campaigns",
+            "List campaigns you can access, with progress. Filter by status (active = every live campaign, incl. in progress; "
+            "upcoming = draft/scheduled) and/or `name` (part of the campaign name). To find one campaign by its name, pass "
+            "name — don't conclude it doesn't exist from a status-filtered list.",
+            {
+                "status": {"type": "string", "enum": ["active", "upcoming", "completed"]},
+                "name": {"type": "string", "description": "Part of the campaign name"},
+            },
+        ),
         _list_campaigns,
     ),
     "campaign_overview": (

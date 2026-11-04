@@ -256,6 +256,57 @@ async def test_admin_sees_all_campaigns():
 
 
 @pytest.mark.asyncio
+async def test_list_campaigns_files_campaigns_the_way_the_app_does_and_finds_them_by_name():
+    await _fresh_db()
+    session, scope = await _scope_for("staff", user_email="admin@isn.com")
+    try:
+        a, b, c = (await session.execute(select(Campaign).order_by(Campaign.name).limit(3))).scalars().all()
+        a.status, b.status, c.status = "draft", "in_progress", "completed"
+        await session.flush()
+
+        async def found(campaign, status):
+            res = await run_tool(session, scope, "list_campaigns", {"status": status, "name": campaign.name})
+            # A hit that only came from the "other statuses" fallback is not a match for that status.
+            return campaign.name in {x["name"] for x in res["campaigns"]} and "note" not in res, res["total_matching"]
+
+        # "draft" is upcoming and "in_progress" is active — not just the literal statuses "upcoming" / "active".
+        assert (await found(a, "upcoming"))[0] and not (await found(a, "active"))[0]
+        assert (await found(b, "active"))[0] and not (await found(b, "upcoming"))[0]
+        assert (await found(c, "completed"))[0] and not (await found(c, "active"))[0]
+        # A name alone finds it whatever its status, and the total says how many matched.
+        by_name = await run_tool(session, scope, "list_campaigns", {"name": a.name})
+        assert a.name in {x["name"] for x in by_name["campaigns"]} and by_name["total_matching"] >= 1
+        # Asking for a campaign by name under the wrong status still finds it, and says so.
+        wrong = await run_tool(session, scope, "list_campaigns", {"status": "active", "name": a.name})
+        assert a.name in {x["name"] for x in wrong["campaigns"]} and "other statuses" in wrong["note"]
+        # Without a name nothing is widened: the filter is honoured.
+        assert "note" not in await run_tool(session, scope, "list_campaigns", {"status": "completed"})
+    finally:
+        await session.rollback()
+        await session.close()
+
+
+def test_the_staff_agent_is_reminded_of_the_ids_it_already_looked_up():
+    from types import SimpleNamespace
+
+    from app.services.chatbot.agent import _known_entities
+
+    cid, sid = "54721e66-b0b1-404e-9ea1-96a2fcff20b4", "0d02ba33-03e3-4d25-b0b8-1dc4d34e6e4b"
+    rows = [  # newest first, as the query returns them
+        SimpleNamespace(meta={"name": "call_api"}, content='{"data": {"items": [{"id": "%s", "shop_name": "Dunkin\\u2019s \\u2014 Loop"}]}}' % sid),
+        SimpleNamespace(
+            meta={"name": "list_campaigns"},
+            content='{"campaigns": [{"id": "%s", "name": "Dunkin\\u2019s Philadelphia Store Audit #20", "status": "completed"}, {"id": "%s", "name": "Cut off ca' % (cid, sid),
+        ),
+        SimpleNamespace(meta={"name": "shops_needing_shoppers"}, content='{"id": "%s", "name": "ignored"}' % cid),
+    ]
+    found = dict(_known_entities(rows))
+    assert found[cid] == "Dunkin\u2019s Philadelphia Store Audit #20"  # decoded, and read from a truncated result
+    assert found[sid] == "Dunkin\u2019s \u2014 Loop"  # the newest mention wins; no repeats
+    assert len(found) == 2 and _known_entities([]) == []
+
+
+@pytest.mark.asyncio
 async def test_shopper_identities_are_admin_only():
     await _fresh_db()
     token, _ = await _make_invitation()
@@ -467,12 +518,15 @@ async def test_unanswered_questions_trigger_callback_nudge(fake_llm):
         fake = fake_llm([_say("Offering a callback.")])
         await c.post("/api/chatbot/visitor/message", json={"message": "anything", **keys})
     system = fake.seen[0][0]["content"]
-    assert "human callback" in system
+    # Visitors (and staff) are answered without a person: after misses the agent is told to search again with other
+    # keywords, not to hand off. (Shoppers keep the escalation path for things only a coordinator can do.)
+    assert "Rephrase the question" in system and "unless the user asks for one" in system
+    assert "now offer a human callback" not in system
 
 
 def test_knowledge_search_is_grounded():
     hit = knowledge.search("how does the invitation link work", "shopper")
-    assert hit["status"] == "ok" and hit["facts"][0]["id"] == "how_invitations_work"
+    assert hit["status"] == "ok" and "how_invitations_work" in {f["id"] for f in hit["facts"]}
     assert knowledge.search("qwerty zxcvb", "shopper")["status"] == "no_match"
     # Staff-only facts are not served to anonymous visitors.
     staff_only = knowledge.search("bulk voice call transcripts call tracking", "visitor")
@@ -1205,6 +1259,28 @@ def test_api_catalog_hides_sensitive_operations_and_scopes_by_role():
     assert "GET /api/campaigns" in text and "/api/auth" not in text
 
 
+def test_the_assistant_can_operate_ai_autopilot_and_real_sends_need_a_clear_yes():
+    from app.models import User as _U
+
+    conv = ChatConversation(audience="staff", session_key="k")
+    admin = ChatScope(audience="staff", conversation=conv, user=_U(name="a", email="a@x", role="admin"))
+    client = ChatScope(audience="staff", conversation=conv, user=_U(name="c", email="c@x", role="client"))
+    for scope in (admin, client):
+        cat = api_tools.catalog_for(scope)
+        for op in (
+            ("GET", "/api/autopilot/campaigns/{campaign_id}"),
+            ("PUT", "/api/autopilot/campaigns/{campaign_id}"),
+            ("POST", "/api/autopilot/campaigns/{campaign_id}/run"),
+            ("PUT", "/api/autopilot/defaults"),
+        ):
+            assert op in cat, op
+    assert "AI Autopilot" in api_tools.catalog_text(client)
+    # Running it, or switching it on, can email real shoppers: both are flagged as high impact for the confirmation.
+    assert api_tools._impact("POST", "/api/autopilot/campaigns/{campaign_id}/run")[0] == "high"
+    assert api_tools._impact("PUT", "/api/autopilot/campaigns/{campaign_id}")[0] == "high"
+    assert api_tools._impact("PUT", "/api/autopilot/defaults")[0] == "high"
+
+
 @pytest.mark.asyncio
 async def test_api_reads_keep_tenant_isolation():
     await _fresh_db()
@@ -1506,3 +1582,30 @@ async def test_client_can_fetch_its_own_dashboard_and_profile_and_navigate_names
     finally:
         await session.rollback()
         await session.close()
+
+
+@pytest.mark.asyncio
+async def test_the_agent_is_handed_the_relevant_knowledge_before_it_answers(fake_llm):
+    """Grounding must not depend on the model remembering to call the search tool."""
+    await _fresh_db()
+    fake = fake_llm([_say("ok"), _say("ok"), _say("ok")])
+    async with _client() as c:
+        a = (await c.post("/api/chatbot/visitor/message", json={"message": "How do I create an account for my company?"})).json()
+        keys = {"conversation_id": a["conversation_id"], "session_key": a["session_key"]}
+        # A short follow-up is searched together with the previous question.
+        await c.post("/api/chatbot/visitor/message", json={"message": "and the password?", **keys})
+        await c.post("/api/chatbot/visitor/message", json={"message": "qwerty zxcvb"})
+    first, follow_up, nonsense = (fake.seen[i][0]["content"] for i in range(3))
+    assert "KNOWLEDGE BASE EXCERPTS" in first and "Create a client account" in first
+    assert "KNOWLEDGE BASE EXCERPTS" in follow_up and "Forgot or reset my password" in follow_up
+    assert "KNOWLEDGE BASE EXCERPTS" not in nonsense  # nothing relevant: no noise is injected
+
+
+@pytest.mark.asyncio
+async def test_the_assistant_never_pushes_a_human_for_a_product_question(fake_llm):
+    await _fresh_db()
+    fake = fake_llm([_say("ok")])
+    async with _client() as c:
+        await c.post("/api/chatbot/visitor/message", json={"message": "what is shoppermatch"})
+    system = fake.seen[0][0]["content"]
+    assert "do NOT push the user to a human" in system and "without any human support" in system
