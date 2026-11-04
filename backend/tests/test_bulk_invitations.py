@@ -21,11 +21,12 @@ async def _login(client: AsyncClient) -> dict:
 async def _shop_with_room(client: AsyncClient, auth: dict) -> tuple[dict, dict]:
     campaigns = (await client.get("/api/campaigns", headers=auth)).json()["items"]
     for campaign in campaigns:
-        shops = (await client.get("/api/shops", params={"campaign_id": campaign["id"]}, headers=auth)).json()["items"]
+        # The seed's order is random and some shops already hold an invitation, so go by the slots actually open.
+        shops = (await client.get(f"/api/campaigns/{campaign['id']}/shops", headers=auth)).json()["items"]
         for shop in shops:
-            if shop["required_shoppers"] >= 2:
+            if shop["open_slots"] >= 2:
                 return campaign, shop
-    pytest.skip("seed has no shop that needs 2+ shoppers")
+    pytest.skip("seed has no shop with 2+ open slots")
 
 
 @pytest.mark.asyncio

@@ -41,9 +41,13 @@ def _ceil5(n: float) -> int:
     return int(math.ceil(n / 5.0)) * 5
 
 
-def bonus_ceiling(compensation: int | None) -> int:
+def bonus_ceiling(compensation: int | None, multiplier: float = BONUS_CEILING_X_PAY) -> int:
+    """The most a bonus may reach for a shop: a multiple of its pay (the AI Autopilot passes its own, stricter,
+    guardrail multiplier)."""
+    if multiplier <= 0:
+        return 0  # bonuses switched off by the guardrail
     base = compensation if compensation and compensation > 0 else DEFAULT_PAY
-    return max(30, _round5(base * BONUS_CEILING_X_PAY))
+    return max(10, _round5(base * multiplier))
 
 
 def bonus_reach_km(amount: int | float | None) -> float:
@@ -72,6 +76,7 @@ def suggest_bonus(
     existing_amount: int | None = None,
     base_radius: float | None = None,
     needed_km: float | None = None,
+    ceiling: int | None = None,
 ) -> dict | None:
     """A bonus sized to the shop's own pay and how much of the open slots can't be filled — and, when the
     shoppers that would fill it are known (`needed_km`), large enough that its reach gets to them.
@@ -80,7 +85,7 @@ def suggest_bonus(
     if shortfall <= 0 or slots_open <= 0:
         return None
     base = compensation if compensation and compensation > 0 else DEFAULT_PAY
-    ceiling = bonus_ceiling(compensation)
+    ceiling = ceiling if ceiling is not None else bonus_ceiling(compensation)
     share = 0.25 + 0.5 * min(1.0, shortfall / slots_open)
     amount = max(10, _round5(base * share))
     if needed_km is not None and base_radius is not None:
@@ -125,6 +130,7 @@ def gap_options(
     eligible: int,
     slots_open: int,
     shortfall: int,
+    ceiling: int | None = None,
 ) -> dict:
     """What can close a shop's gap: the radius that reaches enough shoppers, a bonus that does, or — when the
     nearest shopper is far — recruiting locally. `distances` are the shoppers outside the current reach."""
@@ -148,6 +154,7 @@ def gap_options(
         existing_amount=existing,
         base_radius=base_radius,
         needed_km=needed,
+        ceiling=ceiling,
     )
     if (
         suggestion
@@ -165,8 +172,8 @@ def gap_options(
         "far": far,
         "recruit_locally": recruit_locally,
         "suggested_bonus": suggestion,
-        "bonus_maxed": bonus is not None and bonus.amount >= bonus_ceiling(shop.compensation),
-        "bonus_ceiling": bonus_ceiling(shop.compensation),
+        "bonus_maxed": bonus is not None and bonus.amount >= (ceiling if ceiling is not None else bonus_ceiling(shop.compensation)),
+        "bonus_ceiling": ceiling if ceiling is not None else bonus_ceiling(shop.compensation),
     }
 
 

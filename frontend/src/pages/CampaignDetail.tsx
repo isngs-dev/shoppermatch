@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { AutopilotCard } from "../components/AutopilotCard";
 import { Funnel } from "../components/Funnel";
 import { InvitationDrawer } from "../components/InvitationDrawer";
 import { ShopperDrawer } from "../components/ShopperDrawer";
@@ -559,6 +560,18 @@ function RecommendationsTab({
           close the gap.
         </p>
       </div>
+
+      {/* 0 — let the AI do all of it, inside guardrails */}
+      <AutopilotCard
+        campaignId={campaignId}
+        onChanged={() => {
+          shops.reload();
+          if (shopId) runMatching();
+        }}
+        onOpenOutreach={() =>
+          navigate(`/client/outreach?campaign=${campaignId}&type=${campaign.bucket === "upcoming" ? "upcoming" : "active"}&view=approved`)
+        }
+      />
 
       {/* 1 — which shop, and where it stands */}
       <div className="card p-4">

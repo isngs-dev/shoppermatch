@@ -117,6 +117,9 @@ _RETROFIT_COLUMNS: list[tuple[str, str, str]] = [
     ("shopper_automation_states", "voice_call_last_at", "TIMESTAMP WITH TIME ZONE"),
     # AI Voice Call Follow-Up: custom opening message (migration 0020)
     ("email_automations", "voice_call_message", "TEXT"),
+    # AI Autopilot: "fill every shop" mode + how many shops one shopper may be lined up for
+    ("autopilot_settings", "fill_every_shop", "BOOLEAN"),
+    ("autopilot_settings", "max_shops_per_shopper", "INTEGER"),
     # Bulk Voice Call: optional link back to the automation it was launched from
     ("bulk_call_batches", "automation_id", "VARCHAR(36)"),
 ]

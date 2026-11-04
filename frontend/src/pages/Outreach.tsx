@@ -202,6 +202,9 @@ export function Outreach() {
   // Arriving from "Approve All" in AI Recommendations: show everything that was just approved — every shop that
   // has approved-but-unsent invitations is selected, and all of those shoppers are listed and ticked.
   const showApproved = searchParams.get("view") === "approved";
+  // "all": every shop of the campaign and, for each, every shopper it needs (approved ones plus the AI's picks for
+  // open slots) — one send to all of them. "individual": pick shops and shoppers by hand.
+  const [audience, setAudience] = useState<"all" | "individual">(showApproved ? "all" : "individual");
 
   // Active and Upcoming campaigns are fetched together and shown in one
   // list — no manual bucket toggle. Completed campaigns never appear here
@@ -273,9 +276,13 @@ export function Outreach() {
   // shop's own required_shoppers count is respected. Runs across the whole
   // campaign and gets filtered down to just the checked shops below, since
   // the optimizer has no "restrict to this subset" mode of its own.
+  // The search never goes wider than the campaign's AI Autopilot guardrail, so a shop that came up short isn't
+  // quietly filled with someone from another city.
+  const autopilotCfg = useApi(() => (campaignId ? api.autopilot(campaignId) : Promise.resolve(null)), [campaignId]);
+  const radiusLimit: number = autopilotCfg.data?.effective?.max_radius_km ?? 150;
   const combinedRecs = useApi(
-    () => (isMultiShop ? api.aiOptimizeAssignments(campaignId) : Promise.resolve(null)),
-    [campaignId, isMultiShop]
+    () => (isMultiShop ? api.aiOptimizeAssignments(campaignId, radiusLimit) : Promise.resolve(null)),
+    [campaignId, isMultiShop, radiusLimit]
   );
 
   // Invitations already approved for this campaign (e.g. via AI Recommendations)
@@ -407,6 +414,11 @@ export function Outreach() {
   // Coming from "Approve All": select every shop that has approved invitations waiting, once per campaign.
   const approvedAppliedFor = useRef("");
   useEffect(() => {
+    if (audience === "all") {
+      // Everything is in scope: all the campaign's shops (each shop's required shoppers are listed below).
+      if (shops.length) setSelectedShopIds(new Set(shops.map((s: any) => s.id)));
+      return;
+    }
     if (!showApproved || preselectedShopId || !campaignId || !shops.length || !pendingInvitationsApi.data) return;
     if (approvedAppliedFor.current === campaignId) return;
     const withPending = new Set(((pendingInvitationsApi.data.items || []) as any[]).map((inv) => inv.shop_id));
@@ -414,7 +426,7 @@ export function Outreach() {
     if (!ids.length) return;
     approvedAppliedFor.current = campaignId;
     setSelectedShopIds(new Set(ids));
-  }, [showApproved, preselectedShopId, campaignId, shops, pendingInvitationsApi.data]);
+  }, [audience, showApproved, preselectedShopId, campaignId, shops, pendingInvitationsApi.data]);
 
   // Force a fresh top-candidate pick whenever the shop changes (campaign
   // switch or a direct dropdown pick) — otherwise a shopper who's merely a
@@ -1058,11 +1070,43 @@ export function Outreach() {
                 )}
               </div>
               <div>
+                <label className="label">Send to</label>
+                <div className="flex gap-1 rounded-lg bg-slate-100 p-1 text-xs font-semibold dark:bg-slate-800">
+                  {(
+                    [
+                      ["all", "All shops · all required shoppers"],
+                      ["individual", "Choose individually"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setAudience(key)}
+                      className={classNames(
+                        "flex-1 rounded-md px-3 py-1.5",
+                        audience === key
+                          ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white"
+                          : "text-slate-500 dark:text-slate-400"
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  {audience === "all"
+                    ? `Every shop in this campaign gets every shopper it needs — ${bulkSelected.size} shopper(s) across ${
+                        new Set(shopperOptions.map((o) => o.shopId).filter(Boolean)).size
+                      } shop(s) — in one send. Switch to “Choose individually” to pick by hand.`
+                    : "Pick the shops and shoppers yourself."}
+                </p>
+              </div>
+              <div>
                 <div className="flex items-center justify-between">
                   <label className="label !mb-0">
                     Shop{isMultiShop ? ` — ${selectedShopIds.size} selected, combined requirement` : ""}
                   </label>
-                  {shops.length > 1 && (
+                  {shops.length > 1 && audience === "individual" && (
                     <div className="flex gap-2 text-[11px]">
                       <button
                         type="button"
@@ -1094,6 +1138,7 @@ export function Outreach() {
                       >
                         <input
                           type="checkbox"
+                          disabled={audience === "all"}
                           checked={selectedShopIds.has(s.id)}
                           onChange={() =>
                             setSelectedShopIds((prev) => {
@@ -1142,7 +1187,7 @@ export function Outreach() {
                   <div className="input flex items-center text-sm text-slate-400">Finding eligible shoppers…</div>
                 ) : (
                   <>
-                    <div className="flex gap-2 pb-1.5 text-[11px]">
+                    <div className={classNames("flex gap-2 pb-1.5 text-[11px]", audience === "all" && "hidden")}>
                       <button
                         type="button"
                         className="font-semibold text-brand-600 hover:underline dark:text-brand-400"
@@ -1166,7 +1211,12 @@ export function Outreach() {
                           key={s.id}
                           className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800/50"
                         >
-                          <input type="checkbox" checked={bulkSelected.has(s.id)} onChange={() => toggleBulkSelected(s.id)} />
+                          <input
+                            type="checkbox"
+                            disabled={audience === "all"}
+                            checked={bulkSelected.has(s.id)}
+                            onChange={() => toggleBulkSelected(s.id)}
+                          />
                           <span className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200">
                             {s.shopName
                               ? `${s.name} — for ${s.shopName}`

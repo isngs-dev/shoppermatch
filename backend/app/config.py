@@ -226,6 +226,27 @@ class Settings(BaseSettings):
     # that protects against a runaway automation dialing hundreds of numbers.
     voice_call_daily_limit: int = 50
 
+    # ----- AI Autopilot (services/autopilot.py) -----
+    # Recommends shoppers for every open shop, widens the radius / raises the bonus within these guardrails when
+    # there aren't enough, and creates (review) or creates + emails (auto) the invitations. Nothing runs for a
+    # campaign until its mode is switched on — `autopilot_default_mode` stays "off" unless deliberately changed;
+    # the per-client / per-campaign settings in the UI override it.
+    autopilot_scheduler: bool = True  # background worker on/off (it still only touches campaigns whose mode is on)
+    autopilot_poll_seconds: float = 300.0
+    autopilot_min_interval_minutes: float = 30.0  # per campaign, between scheduled runs
+    autopilot_default_mode: str = "off"
+    autopilot_max_radius_km: float = 150.0
+    autopilot_max_bonus_multiplier: float = 2.0  # a bonus never exceeds this multiple of the shop's own pay
+    autopilot_min_match_score: int = 40
+    autopilot_max_invitations_per_run: int = 100
+    # "Fill every shop": when the limits above aren't enough, keep going (share nearby shoppers across shops,
+    # stretch the radius, accept weaker matches) instead of stopping — and keep retrying until a shop is full.
+    autopilot_fill_every_shop: bool = True
+    autopilot_max_shops_per_shopper: int = 3  # per campaign (sharing a shopper across shops)
+    # Across ALL campaigns: a shopper never holds more than this many invitations they haven't answered yet, so a
+    # small pool of shoppers is never buried under invitations. Beyond it they are skipped until they respond.
+    autopilot_max_open_per_shopper: int = 5
+
     @property
     def resolved_database_url(self) -> str:
         # Managed Postgres add-ons (Railway, Render, Heroku, ...) inject a

@@ -989,6 +989,35 @@ class ShopBonus(Base):
     campaign: Mapped["Campaign"] = relationship()
 
 
+# --------------------------------------------------------------------------- #
+# AI Autopilot configuration. One table, three scopes — a campaign override (campaign_id set), a client default
+# (client_id set, campaign_id NULL) and a global default (both NULL). Every field is nullable and NULL means
+# "inherit from the next scope up", so a campaign added later (e.g. synced from SASSIE) picks up its client's
+# default without anyone touching it. The campaign row also keeps the last run's report.
+# --------------------------------------------------------------------------- #
+class AutopilotSetting(Base):
+    __tablename__ = "autopilot_settings"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    campaign_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=True, unique=True, index=True
+    )
+    mode: Mapped[str | None] = mapped_column(String(10), nullable=True)  # off | review | auto
+    max_radius_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_bonus_multiplier: Mapped[float | None] = mapped_column(Float, nullable=True)
+    min_match_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_invitations_per_run: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fill_every_shop: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    max_shops_per_shopper: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_report: Mapped[dict | None] = mapped_column(json_col(), nullable=True)
+
+
 # Event type + status constants (kept in one place for reuse across the app).
 class EventType:
     INVITATION_CREATED = "invitation_created"

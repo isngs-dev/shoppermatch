@@ -275,6 +275,7 @@ def run_matching(
     campaign: Campaign,
     radius_km: float | None = None,
     requirements: dict | None = None,
+    exclude_ids: set | None = None,
 ) -> dict:
     """Full pipeline: normalize requirement → embed → score every active,
     available candidate → rank. Nothing here is randomly generated — every
@@ -303,7 +304,10 @@ def run_matching(
     outside_distances: list[float] = []
     excluded_requirements = 0
 
+    skip = {str(i) for i in (exclude_ids or ())}
     for s in shoppers:
+        if skip and str(s.id) in skip:
+            continue  # already invited / lined up elsewhere: neither a candidate nor "someone just out of reach"
         if not s.active:
             excluded_inactive += 1
             continue

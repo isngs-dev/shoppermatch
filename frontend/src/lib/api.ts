@@ -348,6 +348,13 @@ export const api = {
       method: "POST",
       body: shopRadii && Object.keys(shopRadii).length ? { shop_radii: shopRadii } : undefined,
     }),
+  // AI Autopilot: per-campaign settings/report, the client-wide default (also covers campaigns added later), and a run.
+  autopilot: (campaignId: string) => request(`/api/autopilot/campaigns/${campaignId}`),
+  setAutopilot: (campaignId: string, body: Record<string, any>) =>
+    request(`/api/autopilot/campaigns/${campaignId}`, { method: "PUT", body }),
+  setAutopilotDefaults: (body: Record<string, any>) => request("/api/autopilot/defaults", { method: "PUT", body }),
+  runAutopilot: (campaignId: string, body: { dry_run: boolean; mode?: string }) =>
+    request(`/api/autopilot/campaigns/${campaignId}/run`, { method: "POST", body }),
   aiAnomalies: () => request("/api/ai/anomalies"),
   aiDataQuality: () => request("/api/ai/data-quality"),
   aiFeedbackAnalysis: (campaignId: string) => request(`/api/ai/campaigns/${campaignId}/feedback-analysis`),
