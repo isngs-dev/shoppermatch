@@ -205,7 +205,7 @@ async def _build(session) -> None:
         name="MS Brand Team",
         email="client@ms-demo.example",
         role="client",
-        password_hash=hash_password("client-demo-2026"),
+        password_hash=hash_password("ms-demo-2026"),
         client=client_ms,
     )
     session.add(demo_client_user)

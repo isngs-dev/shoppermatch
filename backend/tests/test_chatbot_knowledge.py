@@ -96,6 +96,6 @@ def test_nonsense_is_no_match_but_still_offers_topics_to_browse():
 def test_no_secret_or_credential_is_ever_in_the_guides():
     import re
 
-    secret = re.compile(r"sk-[A-Za-z0-9]{10,}|SG\.[A-Za-z0-9_-]{10,}|isn-demo-2026|client-demo-2026|AC[a-f0-9]{30}")
+    secret = re.compile(r"sk-[A-Za-z0-9]{10,}|SG\.[A-Za-z0-9_-]{10,}|isn-demo-2026|client-demo-2026|ms-demo-2026|AC[a-f0-9]{30}")
     for chunk in knowledge._load():
         assert not secret.search(chunk.text), chunk.id

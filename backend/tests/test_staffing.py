@@ -297,7 +297,10 @@ async def test_a_shop_only_has_coverage_once_its_invitations_are_actually_sent()
             await s.commit()
         sent = await row()
         assert sent["reached_shoppers"] == len(picks)
-        assert sent["coverage"] == ("healthy" if len(picks) >= shop["required_shoppers"] else "medium")
+        # Healthy only if everyone the shop needs was found; otherwise whatever share of them was reached.
+        from app.services.staffing import coverage_tier
+
+        assert sent["coverage"] == coverage_tier(shop["required_shoppers"], len(picks))
 
 
 def uuid_of(value: str):

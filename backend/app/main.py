@@ -49,7 +49,7 @@ from .routers import (
 from .seed import maybe_seed
 from .services.automation import ensure_default_templates, run_automation_scheduler
 from .services.autopilot import run_autopilot_scheduler
-from .services.demo_rename import rename_demo_client
+from .services.demo_rename import refresh_demo_client_password, rename_demo_client
 from .services.outbox import reset_stuck_jobs, run_outbox_worker
 from .services.social_publisher import run_social_publisher
 from .services.chatbot.followups import run_followup_worker
@@ -82,6 +82,7 @@ async def lifespan(app: FastAPI):
         await ensure_default_templates(session)
         # Databases seeded before the demo client "Nike" became "MS" are renamed once, here.
         await rename_demo_client(session)
+        await refresh_demo_client_password(session)
         await session.commit()
     worker = asyncio.create_task(run_outbox_worker(), name="shoppermatch-email-outbox")
     automation_worker = asyncio.create_task(run_automation_scheduler(), name="shoppermatch-automation-scheduler")
@@ -180,6 +181,12 @@ INDEX_HTML = os.path.join(STATIC_DIR, "index.html")
 
 _RESERVED_PREFIXES = ("api", "r/", "track/", "docs", "redoc", "openapi.json")
 
+# The app shell must be revalidated on every load (it is tiny and ETag-checked), otherwise a browser keeps showing the
+# previous deploy's page — with the previous deploy's login hints — after a new build goes out. Build output under
+# /assets has a content hash in its name, so it can be cached for good.
+_SHELL_CACHE = {"Cache-Control": "no-cache"}
+_ASSET_CACHE = {"Cache-Control": "public, max-age=31536000, immutable"}
+
 _FALLBACK_PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <title>ShopperMatch.AI — backend running</title>
 <style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0;
@@ -206,9 +213,10 @@ async def spa(full_path: str, request: Request):
     if full_path:
         candidate = os.path.normpath(os.path.join(STATIC_DIR, full_path))
         if candidate.startswith(STATIC_DIR + os.sep) and os.path.isfile(candidate):
-            return FileResponse(candidate)
+            hashed = full_path.startswith("assets/")
+            return FileResponse(candidate, headers=_ASSET_CACHE if hashed else _SHELL_CACHE)
 
     # Otherwise return the SPA shell (client-side routing) or a fallback page.
     if os.path.isfile(INDEX_HTML):
-        return FileResponse(INDEX_HTML)
-    return HTMLResponse(_FALLBACK_PAGE)
+        return FileResponse(INDEX_HTML, headers=_SHELL_CACHE)
+    return HTMLResponse(_FALLBACK_PAGE, headers=_SHELL_CACHE)

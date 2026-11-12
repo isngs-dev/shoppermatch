@@ -10,7 +10,15 @@ from sqlalchemy import select
 from app.database import AsyncSessionLocal
 from app.main import app
 from app.models import Campaign, Client, Shop, Shopper, User
-from app.services.demo_rename import NEW_EMAIL, OLD_EMAIL, rename_demo_client
+from app.security import hash_password
+from app.services.demo_rename import (
+    NEW_EMAIL,
+    NEW_PASSWORD,
+    OLD_EMAIL,
+    OLD_PASSWORD,
+    refresh_demo_client_password,
+    rename_demo_client,
+)
 from tests.test_acceptance import _fresh_db
 
 
@@ -72,9 +80,10 @@ async def test_an_old_database_is_renamed_once_and_only_for_the_demo_client():
         assert await rename_demo_client(s) is False
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as c:
-        ok = await c.post("/api/auth/login", json={"email": NEW_EMAIL, "password": "client-demo-2026"})
-        old = await c.post("/api/auth/login", json={"email": OLD_EMAIL, "password": "client-demo-2026"})
-        assert ok.status_code == 200 and old.status_code == 401
+        ok = await c.post("/api/auth/login", json={"email": NEW_EMAIL, "password": NEW_PASSWORD})
+        old_email = await c.post("/api/auth/login", json={"email": OLD_EMAIL, "password": OLD_PASSWORD})
+        old_password = await c.post("/api/auth/login", json={"email": NEW_EMAIL, "password": OLD_PASSWORD})
+        assert ok.status_code == 200 and old_email.status_code == 401 and old_password.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -85,3 +94,52 @@ async def test_a_fresh_database_is_already_ms_and_nothing_is_renamed():
         assert await s.scalar(select(User).where(User.email == NEW_EMAIL)) is not None
         assert (await s.scalar(select(Client).where(Client.company_name == "MS"))) is not None
         assert (await s.scalar(select(Client).where(Client.company_name == "Nike"))) is None
+
+
+@pytest.mark.asyncio
+async def test_a_renamed_login_with_the_old_default_password_moves_to_the_ms_password():
+    await _fresh_db()
+    async with AsyncSessionLocal() as s:
+        user = await s.scalar(select(User).where(User.email == NEW_EMAIL))
+        user.password_hash = hash_password(OLD_PASSWORD)  # renamed earlier, password not yet
+        await s.commit()
+    async with AsyncSessionLocal() as s:
+        assert await refresh_demo_client_password(s) is True
+        await s.commit()
+    async with AsyncSessionLocal() as s:
+        assert await refresh_demo_client_password(s) is False  # once only
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as c:
+        assert (await c.post("/api/auth/login", json={"email": NEW_EMAIL, "password": NEW_PASSWORD})).status_code == 200
+        assert (await c.post("/api/auth/login", json={"email": NEW_EMAIL, "password": OLD_PASSWORD})).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_a_password_someone_chose_is_never_overwritten():
+    await _fresh_db()
+    async with AsyncSessionLocal() as s:
+        user = await s.scalar(select(User).where(User.email == NEW_EMAIL))
+        user.password_hash = hash_password("my-own-password-1")
+        await s.commit()
+    async with AsyncSessionLocal() as s:
+        assert await refresh_demo_client_password(s) is False
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as c:
+        assert (await c.post("/api/auth/login", json={"email": NEW_EMAIL, "password": "my-own-password-1"})).status_code == 200
+
+
+def test_the_app_shell_is_never_served_from_a_stale_browser_cache(tmp_path, monkeypatch):
+    """After a deploy, index.html must be revalidated (so the new login page and its hints show up), while hashed
+    build assets can be cached for good."""
+    from fastapi.testclient import TestClient
+
+    from app import main as app_main
+
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<!doctype html><title>shell</title>")
+    (tmp_path / "assets" / "index-abc123.js").write_text("console.log(1)")
+    monkeypatch.setattr(app_main, "STATIC_DIR", str(tmp_path))
+    monkeypatch.setattr(app_main, "INDEX_HTML", str(tmp_path / "index.html"))
+    with TestClient(app_main.app) as client:  # runs startup against the test database
+        shell = client.get("/login")
+        asset = client.get("/assets/index-abc123.js")
+    assert shell.status_code == 200 and shell.headers["cache-control"] == "no-cache"
+    assert "immutable" in asset.headers["cache-control"]

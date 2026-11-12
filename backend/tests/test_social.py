@@ -41,7 +41,7 @@ def _client() -> AsyncClient:
 async def _ms_client_auth() -> dict:
     async with _client() as client:
         r = await client.post(
-            "/api/auth/login", json={"email": "client@ms-demo.example", "password": "client-demo-2026"}
+            "/api/auth/login", json={"email": "client@ms-demo.example", "password": "ms-demo-2026"}
         )
         assert r.status_code == 200, r.text
         return {"Authorization": f"Bearer {r.json()['access_token']}"}

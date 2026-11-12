@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Campaign, Client, ClientSocialAccount, Shop, Shopper, User
+from ..security import hash_password, verify_password
 from .audit import record_audit
 
 log = logging.getLogger("app.demo_rename")
@@ -24,6 +25,7 @@ log = logging.getLogger("app.demo_rename")
 OLD_EMAIL = "client@nike-demo.example"
 NEW_EMAIL = "client@ms-demo.example"
 OLD_NAME, NEW_NAME = "Nike", "MS"
+OLD_PASSWORD, NEW_PASSWORD = "client-demo-2026", "ms-demo-2026"
 
 
 def _swap(text: str | None) -> str | None:
@@ -42,6 +44,7 @@ async def rename_demo_client(session: AsyncSession) -> bool:
 
     user.email = NEW_EMAIL
     user.name = _swap(user.name) or user.name
+    _use_new_password(user)
 
     client = await session.get(Client, user.client_id) if user.client_id else None
     if client is not None and client.company_name == OLD_NAME:
@@ -82,4 +85,31 @@ async def rename_demo_client(session: AsyncSession) -> bool:
         meta={"from": OLD_NAME, "to": NEW_NAME},
     )
     log.info("Renamed the demo client %s to %s (login is now %s)", OLD_NAME, NEW_NAME, NEW_EMAIL)
+    return True
+
+
+def _use_new_password(user: User) -> bool:
+    """Move the demo login to its MS-named password, but only while it still has the old default: a password
+    someone chose themselves is never overwritten."""
+    if verify_password(OLD_PASSWORD, user.password_hash):
+        user.password_hash = hash_password(NEW_PASSWORD)
+        return True
+    return False
+
+
+async def refresh_demo_client_password(session: AsyncSession) -> bool:
+    """For databases whose demo login was already renamed to client@ms-demo.example but still has the old
+    password. Idempotent: once changed, the old password no longer verifies. The caller commits."""
+    user = await session.scalar(select(User).where(User.email == NEW_EMAIL))
+    if user is None or not _use_new_password(user):
+        return False
+    await record_audit(
+        session,
+        action="demo.client_password_renamed",
+        actor="system",
+        entity_type="user",
+        entity_id=str(user.id),
+        summary=f"The demo login {NEW_EMAIL} now uses its MS-named demo password",
+        meta={},
+    )
     return True

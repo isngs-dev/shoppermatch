@@ -63,7 +63,7 @@ async def _admin() -> dict:
 
 
 async def _ms_client() -> dict:
-    return await _login("client@ms-demo.example", "client-demo-2026")
+    return await _login("client@ms-demo.example", "ms-demo-2026")
 
 
 def _call(name: str, args: dict, call_id: str = "c1") -> dict:
