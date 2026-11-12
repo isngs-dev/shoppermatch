@@ -62,8 +62,8 @@ async def _admin() -> dict:
     return await _login("admin@isn.com", "isn-demo-2026")
 
 
-async def _nike_client() -> dict:
-    return await _login("client@nike-demo.example", "client-demo-2026")
+async def _ms_client() -> dict:
+    return await _login("client@ms-demo.example", "client-demo-2026")
 
 
 def _call(name: str, args: dict, call_id: str = "c1") -> dict:
@@ -109,7 +109,7 @@ def _reset_rate_limit():
     chatbot_router._limiter._hits.clear()
 
 
-async def _make_invitation(campaign_name_contains: str = "Nike") -> tuple[str, str]:
+async def _make_invitation(campaign_name_contains: str = "MS") -> tuple[str, str]:
     """A fresh invitation (own shopper) → (tracking_token, invitation_id)."""
     async with AsyncSessionLocal() as session:
         camp = (
@@ -139,7 +139,7 @@ async def _make_invitation(campaign_name_contains: str = "Nike") -> tuple[str, s
 
 
 async def _make_rival_tenant() -> str:
-    """A second tenant (client + campaign + shop + one invitation) the Nike
+    """A second tenant (client + campaign + shop + one invitation) the MS
     client must never be able to see. Returns the rival campaign's name."""
     async with AsyncSessionLocal() as session:
         rival = Client(company_name=f"Rival Co {uuid.uuid4().hex[:4]}", status="active")
@@ -212,11 +212,11 @@ async def test_staff_endpoint_requires_auth():
 async def test_client_only_sees_own_campaigns():
     await _fresh_db()
     rival_name = await _make_rival_tenant()
-    session, scope = await _scope_for("staff", user_email="client@nike-demo.example")
+    session, scope = await _scope_for("staff", user_email="client@ms-demo.example")
     try:
         names = {c["name"] for c in (await run_tool(session, scope, "list_campaigns", {}))["campaigns"]}
         assert names and rival_name not in names
-        assert all("Nike" in n for n in names)
+        assert all("MS" in n for n in names)
         # The rival's campaign can't be reached by name, overview, shop gaps or funnel.
         assert "error" in await run_tool(session, scope, "campaign_overview", {"campaign_name": rival_name})
         assert "error" in await run_tool(session, scope, "outreach_funnel", {"campaign_name": rival_name})
@@ -224,7 +224,7 @@ async def test_client_only_sees_own_campaigns():
         assert all(s["campaign"] != rival_name for s in gaps["shops"])
         # Aggregate funnel counts only this tenant's invitations.
         total = (await run_tool(session, scope, "outreach_funnel", {}))["total"]
-        nike_total = len(
+        ms_total = len(
             (
                 await session.execute(
                     select(Invitation)
@@ -233,7 +233,7 @@ async def test_client_only_sees_own_campaigns():
                 )
             ).scalars().all()
         )
-        assert total == nike_total
+        assert total == ms_total
         events = (await run_tool(session, scope, "recent_activity", {"limit": 15}))["events"]
         assert all(e["campaign"] != rival_name for e in events)
     finally:
@@ -311,7 +311,7 @@ async def test_shopper_identities_are_admin_only():
     await _fresh_db()
     token, _ = await _make_invitation()
     # Client: no shopper tools, and activity rows carry no shopper names.
-    session, scope = await _scope_for("staff", user_email="client@nike-demo.example")
+    session, scope = await _scope_for("staff", user_email="client@ms-demo.example")
     try:
         names = {s["function"]["name"] for s in tool_specs(scope)}
         assert "shopper_search" not in names and "shopper_history" not in names
@@ -338,7 +338,7 @@ async def test_shopper_identities_are_admin_only():
 async def test_staff_flow_end_to_end_persists_tool_calls(fake_llm):
     await _fresh_db()
     fake_llm([_call("outreach_funnel", {}), _say("Here is your funnel.")])
-    auth = await _nike_client()
+    auth = await _ms_client()
     async with _client() as c:
         r = await c.post("/api/chatbot/staff/message", json={"message": "How is outreach doing?"}, headers=auth)
         assert r.status_code == 200, r.text
@@ -366,10 +366,10 @@ async def test_staff_flow_end_to_end_persists_tool_calls(fake_llm):
 async def test_other_users_conversation_is_not_resumed(fake_llm):
     await _fresh_db()
     fake_llm([_say("one"), _say("two")])
-    nike = await _nike_client()
+    ms = await _ms_client()
     admin = await _admin()
     async with _client() as c:
-        first = (await c.post("/api/chatbot/staff/message", json={"message": "hi"}, headers=nike)).json()
+        first = (await c.post("/api/chatbot/staff/message", json={"message": "hi"}, headers=ms)).json()
         stolen = (
             await c.post(
                 "/api/chatbot/staff/message",
@@ -384,7 +384,7 @@ async def test_other_users_conversation_is_not_resumed(fake_llm):
 async def test_navigate_returns_ui_action(fake_llm):
     await _fresh_db()
     fake_llm([_call("navigate", {"page": "bulk_voice_call"}), _say("Opening it.")])
-    auth = await _nike_client()
+    auth = await _ms_client()
     async with _client() as c:
         r = await c.post("/api/chatbot/staff/message", json={"message": "take me to bulk calls"}, headers=auth)
     assert r.json()["actions"] == [
@@ -500,7 +500,7 @@ async def test_visitor_has_no_database_tools():
         # Aggregate counts only — no brand or client names leak.
         res = await run_tool(session, scope, "open_opportunities", {})
         flat = json.dumps(res).lower()
-        assert "nike" not in flat and "starbucks" not in flat and "best buy" not in flat
+        assert "ms" not in flat and "starbucks" not in flat and "best buy" not in flat
     finally:
         await session.rollback()
         await session.close()
@@ -1029,8 +1029,8 @@ async def test_log_activity_and_admin_escalation_views(fake_llm):
         assert r["escalated"] is True
         items = (await c.get("/api/chatbot/admin/escalations", headers=admin)).json()["items"]
         assert items[0]["reason"] == "payment_issue" and items[0]["shopper"] == "Chat Tester"
-        nike = await _nike_client()
-        assert (await c.get("/api/chatbot/admin/escalations", headers=nike)).status_code == 403
+        ms = await _ms_client()
+        assert (await c.get("/api/chatbot/admin/escalations", headers=ms)).status_code == 403
     async with AsyncSessionLocal() as s:
         evs = (await s.execute(select(InvitationEvent).where(InvitationEvent.invitation_id == uuid.UUID(inv_id)))).scalars().all()
         assert any(e.event_type == "chatbot_activity" and e.event_metadata["activity"] == "chatbot_interaction" for e in evs)
@@ -1114,7 +1114,7 @@ async def test_shop_can_be_referenced_by_name_but_only_if_unambiguous_and_in_sco
     session, scope = await _scope_for("shopper", invitation_id=inv_id)
     try:
         shop = await _first_available_shop(session, scope)
-        by_name = shop["name"].upper().replace(" ", "_")  # model-style "NIKE_MANHATTAN"
+        by_name = shop["name"].upper().replace(" ", "_")  # model-style "MS_MANHATTAN"
         res = await run_tool(session, scope, "get_shop_status", {"shop_id": by_name})
         assert "error" not in res, res
         # A rival campaign's shop name resolves to nothing.
@@ -1176,14 +1176,14 @@ async def test_staff_can_request_a_callback_and_admin_sees_it(fake_llm):
         _call("request_callback", {"reason": "Questions about our campaign results", "phone": "+1 555 010 2030", "preferred_time": "tomorrow 3pm"}),
         _say("Done — a team member will contact you."),
     ])
-    nike = await _nike_client()
+    ms = await _ms_client()
     async with _client() as c:
-        r = (await c.post("/api/chatbot/staff/message", json={"message": "can someone call me back?"}, headers=nike)).json()
+        r = (await c.post("/api/chatbot/staff/message", json={"message": "can someone call me back?"}, headers=ms)).json()
         assert r["escalated"] is True and "contact you" in r["reply"]
         admin = await _admin()
         items = (await c.get("/api/chatbot/admin/escalations", headers=admin)).json()["items"]
     cb = next(i for i in items if i["kind"] == "callback")
-    assert "client@nike-demo.example" in cb["summary"] and "+1 555 010 2030" in cb["summary"] and "tomorrow 3pm" in cb["summary"]
+    assert "client@ms-demo.example" in cb["summary"] and "+1 555 010 2030" in cb["summary"] and "tomorrow 3pm" in cb["summary"]
     session, scope = await _scope_for("staff", user_email="admin@isn.com")
     try:
         listed = await run_tool(session, scope, "chat_escalations", {})
@@ -1196,7 +1196,7 @@ async def test_staff_can_request_a_callback_and_admin_sees_it(fake_llm):
 @pytest.mark.asyncio
 async def test_staff_callback_validation_and_no_duplicates():
     await _fresh_db()
-    session, scope = await _scope_for("staff", user_email="client@nike-demo.example")
+    session, scope = await _scope_for("staff", user_email="client@ms-demo.example")
     try:
         bad = await run_tool(session, scope, "request_callback", {"reason": "pricing", "phone": "call me maybe"})
         assert bad["status"] == "invalid_phone" and scope.conversation.status == "open"
@@ -1286,7 +1286,7 @@ async def test_api_reads_keep_tenant_isolation():
     await _fresh_db()
     rival_name = await _make_rival_tenant()
     rival_id = await _rival_campaign_id(rival_name)
-    session, scope = await _staff_scope("client@nike-demo.example")
+    session, scope = await _staff_scope("client@ms-demo.example")
     try:
         res = await run_tool(session, scope, "call_api", {"method": "GET", "path": "/api/campaigns"})
         assert res["status_code"] == 200
@@ -1310,7 +1310,7 @@ async def test_api_reads_keep_tenant_isolation():
 @pytest.mark.asyncio
 async def test_api_rejects_paths_outside_the_catalog():
     await _fresh_db()
-    session, scope = await _staff_scope("client@nike-demo.example")
+    session, scope = await _staff_scope("client@ms-demo.example")
     try:
         for path in (
             "/api/auth/login",
@@ -1337,7 +1337,7 @@ async def test_api_rejects_paths_outside_the_catalog():
 @pytest.mark.asyncio
 async def test_api_write_is_proposed_then_runs_the_stored_proposal_after_a_yes():
     await _fresh_db()
-    session, scope = await _staff_scope("client@nike-demo.example")
+    session, scope = await _staff_scope("client@ms-demo.example")
     body = {"name": "Reminder (approved)", "subject": "Your visit", "html_body": "<p>Hi</p>"}
     try:
         async def template_names():
@@ -1379,7 +1379,7 @@ async def test_api_write_is_proposed_then_runs_the_stored_proposal_after_a_yes()
 async def test_real_world_effects_are_called_out_before_confirmation():
     await _fresh_db()
     _, inv_id = await _make_invitation()
-    session, scope = await _staff_scope("client@nike-demo.example")
+    session, scope = await _staff_scope("client@ms-demo.example")
     try:
         send = await run_tool(session, scope, "call_api", {"method": "POST", "path": f"/api/invitations/{inv_id}/send"})
         assert send["status"] == "needs_confirmation" and send["risk"] == "high" and "real emails" in send["effect"]
@@ -1421,7 +1421,7 @@ async def test_api_per_turn_caps_and_large_responses():
 @pytest.mark.asyncio
 async def test_describe_operation_returns_fields():
     await _fresh_db()
-    session, scope = await _staff_scope("client@nike-demo.example")
+    session, scope = await _staff_scope("client@ms-demo.example")
     try:
         d = await run_tool(session, scope, "describe_api_operation", {"method": "POST", "path": "/api/email-templates"})
         assert d["writes"] is True and d["body_fields"]["name"]["required"] is True and "subject" in d["body_fields"]
@@ -1440,7 +1440,7 @@ async def test_staff_chat_confirms_across_turns_end_to_end(fake_llm):
     import re as _re
 
     body = {"name": "Chat-made template", "subject": "Hello", "html_body": "<p>Hello</p>"}
-    nike = await _nike_client()
+    ms = await _ms_client()
 
     def confirm(messages):
         token = _re.search(r"confirmation_token ([0-9a-f]{6})", messages[0]["content"]).group(1)
@@ -1453,13 +1453,13 @@ async def test_staff_chat_confirms_across_turns_end_to_end(fake_llm):
         _say("Done — the template is created."),
     ])
     async with _client() as c:
-        r1 = (await c.post("/api/chatbot/staff/message", json={"message": "create a template called Chat-made template"}, headers=nike)).json()
+        r1 = (await c.post("/api/chatbot/staff/message", json={"message": "create a template called Chat-made template"}, headers=ms)).json()
         assert r1["actions"] == []  # nothing changed yet, so no refresh button
-        listing = (await c.get("/api/email-templates", headers=nike)).json()["items"]
+        listing = (await c.get("/api/email-templates", headers=ms)).json()["items"]
         assert all(t["name"] != "Chat-made template" for t in listing)
-        r2 = (await c.post("/api/chatbot/staff/message", json={"message": "yes, go ahead", "conversation_id": r1["conversation_id"]}, headers=nike)).json()
+        r2 = (await c.post("/api/chatbot/staff/message", json={"message": "yes, go ahead", "conversation_id": r1["conversation_id"]}, headers=ms)).json()
         assert r2["actions"] == [{"type": "refresh", "label": "Refresh page"}]
-        listing = (await c.get("/api/email-templates", headers=nike)).json()["items"]
+        listing = (await c.get("/api/email-templates", headers=ms)).json()["items"]
         assert any(t["name"] == "Chat-made template" for t in listing)
 
 
@@ -1467,9 +1467,9 @@ async def test_staff_chat_confirms_across_turns_end_to_end(fake_llm):
 async def test_staff_prompt_lists_operations_and_pending_actions(fake_llm):
     await _fresh_db()
     fake = fake_llm([_say("hi")])
-    nike = await _nike_client()
+    ms = await _ms_client()
     async with _client() as c:
-        await c.post("/api/chatbot/staff/message", json={"message": "hello"}, headers=nike)
+        await c.post("/api/chatbot/staff/message", json={"message": "hello"}, headers=ms)
     system = fake.seen[0][0]["content"]
     assert "OPERATIONS YOU CAN CALL" in system and "GET /api/campaigns" in system and "POST /api/automations" in system
     assert "/api/auth" not in system and "/api/admin" not in system
@@ -1480,7 +1480,7 @@ async def test_staff_prompt_lists_operations_and_pending_actions(fake_llm):
 @pytest.mark.asyncio
 async def test_repeating_the_identical_write_on_a_later_turn_confirms_it_once():
     await _fresh_db()
-    session, scope = await _staff_scope("client@nike-demo.example")
+    session, scope = await _staff_scope("client@ms-demo.example")
     body = {"name": "Repeat-confirmed", "subject": "S", "html_body": "<p>b</p>"}
     call = {"method": "POST", "path": "/api/email-templates", "body": body}
     try:
@@ -1514,9 +1514,9 @@ async def test_repeated_identical_tool_calls_are_stopped_and_rounds_end_with_a_s
     # The model loops on one call until the rounds run out, then must wrap up without tools.
     script = [same] * (settings.chatbot_staff_max_tool_rounds + 1) + [_say("I looked up your campaigns but couldn't finish; how should we continue?")]
     fake = fake_llm(script)
-    nike = await _nike_client()
+    ms = await _ms_client()
     async with _client() as c:
-        r = (await c.post("/api/chatbot/staff/message", json={"message": "start an automation"}, headers=nike)).json()
+        r = (await c.post("/api/chatbot/staff/message", json={"message": "start an automation"}, headers=ms)).json()
         admin = await _admin()
         detail = (await c.get(f"/api/chatbot/admin/conversations/{r['conversation_id']}", headers=admin)).json()
     assert "couldn't finish" in r["reply"]
@@ -1537,9 +1537,9 @@ async def test_staff_model_setting_is_used(fake_llm, monkeypatch):
             return await super().__call__(messages, tools, model)
 
     monkeypatch.setattr(chatbot_agent, "_chat_completion", Rec([_say("a"), _say("b")]))
-    nike = await _nike_client()
+    ms = await _ms_client()
     async with _client() as c:
-        await c.post("/api/chatbot/staff/message", json={"message": "hi"}, headers=nike)
+        await c.post("/api/chatbot/staff/message", json={"message": "hi"}, headers=ms)
         await c.post("/api/chatbot/visitor/message", json={"message": "hi"})
     assert seen == ["gpt-staff", None]  # only the staff agent uses it
 
@@ -1549,12 +1549,12 @@ async def test_staff_model_setting_is_used(fake_llm, monkeypatch):
 async def test_staff_agent_knows_which_page_the_user_is_on(fake_llm):
     await _fresh_db()
     fake = fake_llm([_say("ok"), _say("ok"), _say("ok")])
-    nike = await _nike_client()
+    ms = await _ms_client()
     async with _client() as c:
-        await c.post("/api/chatbot/staff/message", headers=nike,
+        await c.post("/api/chatbot/staff/message", headers=ms,
                      json={"message": "what can I do here?", "page": "/client/email-automation?tab=bulk-call"})
-        await c.post("/api/chatbot/staff/message", headers=nike, json={"message": "hi", "page": "javascript:alert(1)"})
-        await c.post("/api/chatbot/staff/message", headers=nike, json={"message": "hi"})
+        await c.post("/api/chatbot/staff/message", headers=ms, json={"message": "hi", "page": "javascript:alert(1)"})
+        await c.post("/api/chatbot/staff/message", headers=ms, json={"message": "hi"})
     with_page, hostile, none = (f[0]["content"] for f in fake.seen)
     assert "currently on the page /client/email-automation" in with_page and "Bulk Voice Call tab" in with_page
     assert "currently on the page" not in hostile and "currently on the page" not in none  # only plain in-app paths are used
@@ -1569,7 +1569,7 @@ async def test_staff_agent_knows_which_page_the_user_is_on(fake_llm):
 @pytest.mark.asyncio
 async def test_client_can_fetch_its_own_dashboard_and_profile_and_navigate_names_are_forgiving():
     await _fresh_db()
-    session, scope = await _staff_scope("client@nike-demo.example")
+    session, scope = await _staff_scope("client@ms-demo.example")
     try:
         for path in ("/api/client/dashboard", "/api/client/profile", "/api/client/reports"):
             res = await run_tool(session, scope, "call_api", {"method": "GET", "path": path})

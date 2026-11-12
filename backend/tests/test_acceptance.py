@@ -46,15 +46,15 @@ async def test_full_acceptance_flow():
         token = r.json()["access_token"]
         auth = {"Authorization": f"Bearer {token}"}
 
-        # --- Find Sarah Johnson + a Nike shop ---
+        # --- Find Sarah Johnson + a MS shop ---
         r = await client.get("/api/shoppers", params={"q": "Sarah"}, headers=auth)
         assert r.status_code == 200
         sarah = next(s for s in r.json()["items"] if s["name"] == "Sarah Johnson")
 
         r = await client.get("/api/campaigns", headers=auth)
-        nike = next(c for c in r.json()["items"] if "Nike" in c["name"])
+        ms = next(c for c in r.json()["items"] if "MS" in c["name"])
 
-        r = await client.get("/api/shops", params={"campaign_id": nike["id"]}, headers=auth)
+        r = await client.get("/api/shops", params={"campaign_id": ms["id"]}, headers=auth)
         shop = r.json()["items"][0]
 
         # Baseline clicked count for the "dashboard updates" assertion.
@@ -65,7 +65,7 @@ async def test_full_acceptance_flow():
             "/api/invitations",
             headers=auth,
             json={
-                "campaign_id": nike["id"],
+                "campaign_id": ms["id"],
                 "shop_id": shop["id"],
                 "shopper_id": sarah["id"],
                 "auto_send": True,
@@ -81,7 +81,7 @@ async def test_full_acceptance_flow():
         assert "/r/" in tracking_url
         tracking_token = tracking_url.split("/r/")[-1]
         assert len(tracking_token) == 36  # canonical UUID string
-        assert inv["campaign_id"] == nike["id"]
+        assert inv["campaign_id"] == ms["id"]
         assert inv["shopper_id"] == sarah["id"]
         assert inv["attribution"]["source"] == "ISN Outreach"  # 6. source is ISN
         # auto_send recorded sent + delivered
@@ -157,11 +157,11 @@ async def test_open_pixel_preview_does_not_record():
         auth = {"Authorization": f"Bearer {r.json()['access_token']}"}
 
         shoppers = (await client.get("/api/shoppers", headers=auth)).json()["items"]
-        nike = next(c for c in (await client.get("/api/campaigns", headers=auth)).json()["items"] if "Nike" in c["name"])
-        shop = (await client.get("/api/shops", params={"campaign_id": nike["id"]}, headers=auth)).json()["items"][0]
+        ms = next(c for c in (await client.get("/api/campaigns", headers=auth)).json()["items"] if "MS" in c["name"])
+        shop = (await client.get("/api/shops", params={"campaign_id": ms["id"]}, headers=auth)).json()["items"][0]
 
         inv = (await client.post("/api/invitations", headers=auth, json={
-            "campaign_id": nike["id"], "shop_id": shop["id"], "shopper_id": shoppers[0]["id"], "auto_send": True,
+            "campaign_id": ms["id"], "shop_id": shop["id"], "shopper_id": shoppers[0]["id"], "auto_send": True,
         })).json()
         token = inv["urls"]["tracking_url"].split("/r/")[-1]
 

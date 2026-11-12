@@ -111,19 +111,19 @@ async def main() -> None:
         check("Every invitation references valid shopper/shop/campaign IDs", len(orphan_inv) == 0, f"{len(orphan_inv)} orphaned")
 
         print("\n=== AI recommendation engine ===")
-        nike = next((c for c in campaigns if "Nike" in c.name), None) or next(
+        ms = next((c for c in campaigns if "MS" in c.name), None) or next(
             (c for c in campaigns if status_bucket(c.status) == "active"), None
         )
-        if nike is None:
+        if ms is None:
             check("An active campaign exists to test recommendations against", False)
         else:
-            nike_shops = [s for s in shops if s.campaign_id == nike.id]
-            if not nike_shops:
-                check(f"Campaign '{nike.name}' has at least one shop", False)
+            ms_shops = [s for s in shops if s.campaign_id == ms.id]
+            if not ms_shops:
+                check(f"Campaign '{ms.name}' has at least one shop", False)
             else:
-                result = run_matching(list(shoppers), nike_shops[0], nike)
+                result = run_matching(list(shoppers), ms_shops[0], ms)
                 check(
-                    f"AI matching runs against '{nike.name} / {nike_shops[0].shop_name}' and returns candidates",
+                    f"AI matching runs against '{ms.name} / {ms_shops[0].shop_name}' and returns candidates",
                     result["eligible_count"] > 0,
                     f"{result['total_candidates']} analyzed, {result['eligible_count']} eligible",
                 )
@@ -136,10 +136,10 @@ async def main() -> None:
                     )
 
         print("\n=== Invitation + tracking token generation ===")
-        if nike is not None and shops:
-            nike_shops = [s for s in shops if s.campaign_id == nike.id]
+        if ms is not None and shops:
+            ms_shops = [s for s in shops if s.campaign_id == ms.id]
             candidate_shopper = cohort[0] if cohort else shoppers[0]
-            if nike_shops and candidate_shopper:
+            if ms_shops and candidate_shopper:
                 token_a = uuid.uuid4()
                 token_b = uuid.uuid4()
                 check("Tracking tokens are unique per generation", token_a != token_b)

@@ -191,22 +191,22 @@ async def _build(session) -> None:
 
     # ---------------- Clients (Client Portal) ----------------
     # One Client row per brand, each with a company matching a campaign's
-    # client_name below. Nike also gets a demo client-portal login so the
+    # client_name below. MS also gets a demo client-portal login so the
     # Client Portal has something to sign into out of the box — this used to
     # be a one-time Alembic migration backfill, but that only ever ran
     # against a pre-existing SQLite dev database; a fresh deploy (Render/
     # Railway, migrations never invoked) needs it created here instead.
-    client_nike = Client(company_name="Nike", status="active")
+    client_ms = Client(company_name="MS", status="active")
     client_starbucks = Client(company_name="Starbucks", status="active")
     client_bestbuy = Client(company_name="Best Buy", status="active")
-    session.add_all([client_nike, client_starbucks, client_bestbuy])
+    session.add_all([client_ms, client_starbucks, client_bestbuy])
 
     demo_client_user = User(
-        name="Nike Brand Team",
-        email="client@nike-demo.example",
+        name="MS Brand Team",
+        email="client@ms-demo.example",
         role="client",
         password_hash=hash_password("client-demo-2026"),
-        client=client_nike,
+        client=client_ms,
     )
     session.add(demo_client_user)
 
@@ -250,37 +250,37 @@ async def _build(session) -> None:
     la_shoppers = shoppers[16:24]
 
     # ---------------- Campaigns ----------------
-    # All three belong to the one client with a portal login (Nike) — one of
+    # All three belong to the one client with a portal login (MS) — one of
     # each bucket, active/upcoming/completed, so signing in as that client
     # actually shows all three lifecycle stages (each with its own 20
     # shops) instead of only ever seeing "active". Starbucks and Best Buy
     # stay as separate Client rows purely for admin-side brand variety —
     # they just don't own any campaigns themselves in this seed.
-    nike = Campaign(
-        name="Nike New York Metro Store Audit",
-        client_name="Nike",
-        client_id=client_nike.id,
-        description="Retail experience & compliance audit across Nike stores in the New York tri-state area.",
+    ms = Campaign(
+        name="MS New York Metro Store Audit",
+        client_name="MS",
+        client_id=client_ms.id,
+        description="Retail experience & compliance audit across MS stores in the New York tri-state area.",
         status="active",
         deadline=now + timedelta(days=12),
     )
     starbucks = Campaign(
-        name="Nike Chicago Store Launch Recruitment",
-        client_name="Nike",
-        client_id=client_nike.id,
+        name="MS Chicago Store Launch Recruitment",
+        client_name="MS",
+        client_id=client_ms.id,
         description="Recruiting shoppers ahead of a new-store audit across the Chicago metro area.",
         status="upcoming",
         deadline=now + timedelta(days=45),
     )
     bestbuy = Campaign(
-        name="Nike Los Angeles Store Audit",
-        client_name="Nike",
-        client_id=client_nike.id,
+        name="MS Los Angeles Store Audit",
+        client_name="MS",
+        client_id=client_ms.id,
         description="Retail experience & compliance audit wrapped up across the Los Angeles metro area.",
         status="completed",
         deadline=now - timedelta(days=20),
     )
-    session.add_all([nike, starbucks, bestbuy])
+    session.add_all([ms, starbucks, bestbuy])
 
     def make_shop(campaign, brand, loc, category, comp, visit):
         name, state, lat, lng = loc
@@ -302,20 +302,20 @@ async def _build(session) -> None:
             status="open",
         )
 
-    nike_window = (now - timedelta(days=3), now + timedelta(days=12))
+    ms_window = (now - timedelta(days=3), now + timedelta(days=12))
     sbux_window = (now + timedelta(days=30), now + timedelta(days=45))
     bestbuy_window = (now - timedelta(days=35), now - timedelta(days=20))
 
-    nike_shops = [make_shop(nike, "Nike", loc, "Footwear", rnd.randint(25, 40), nike_window) for loc in NYC_LOCALITIES]
-    sbux_shops = [make_shop(starbucks, "Nike", loc, "Footwear", rnd.randint(25, 40), sbux_window) for loc in CHI_LOCALITIES]
-    bestbuy_shops = [make_shop(bestbuy, "Nike", loc, "Footwear", rnd.randint(25, 40), bestbuy_window) for loc in LA_LOCALITIES]
-    all_shops = nike_shops + sbux_shops + bestbuy_shops
+    ms_shops = [make_shop(ms, "MS", loc, "Footwear", rnd.randint(25, 40), ms_window) for loc in NYC_LOCALITIES]
+    sbux_shops = [make_shop(starbucks, "MS", loc, "Footwear", rnd.randint(25, 40), sbux_window) for loc in CHI_LOCALITIES]
+    bestbuy_shops = [make_shop(bestbuy, "MS", loc, "Footwear", rnd.randint(25, 40), bestbuy_window) for loc in LA_LOCALITIES]
+    all_shops = ms_shops + sbux_shops + bestbuy_shops
     session.add_all(all_shops)
 
     # Flush so PK ids are assigned before we build invitations/events.
     await session.flush()
 
-    for c, shops in ((nike, nike_shops), (starbucks, sbux_shops), (bestbuy, bestbuy_shops)):
+    for c, shops in ((ms, ms_shops), (starbucks, sbux_shops), (bestbuy, bestbuy_shops)):
         c.total_shops = len(shops)
 
     # ---------------- Invitations + events ----------------
@@ -345,16 +345,16 @@ async def _build(session) -> None:
         return plan
 
     plan = (
-        build_plan(nike_shops, nyc_shoppers, accepted_n=10, other_n=14)
+        build_plan(ms_shops, nyc_shoppers, accepted_n=10, other_n=14)
         + build_plan(sbux_shops, chi_shoppers, accepted_n=0, other_n=8)
         + build_plan(bestbuy_shops, la_shoppers, accepted_n=18, other_n=2)
     )
 
     rank = {S: 1, DEL: 2, O: 3, C: 4, A: 5, D: 5}
     slug = {
-        "Nike New York Metro Store Audit": "nike_nyc_audit",
-        "Nike Chicago Store Launch Recruitment": "nike_chicago_launch",
-        "Nike Los Angeles Store Audit": "nike_la_audit",
+        "MS New York Metro Store Audit": "ms_nyc_audit",
+        "MS Chicago Store Launch Recruitment": "ms_chicago_launch",
+        "MS Los Angeles Store Audit": "ms_la_audit",
     }
 
     accepted_shop_ids: set = set()
@@ -420,7 +420,7 @@ async def _build(session) -> None:
         session.add_all(events)
 
     # Update campaign completion counts from accepted invitations.
-    for c, shops in ((nike, nike_shops), (starbucks, sbux_shops), (bestbuy, bestbuy_shops)):
+    for c, shops in ((ms, ms_shops), (starbucks, sbux_shops), (bestbuy, bestbuy_shops)):
         completed = sum(1 for sh in shops if sh.id in accepted_shop_ids)
         c.completed_shops = completed
         c.remaining_shops = c.total_shops - completed

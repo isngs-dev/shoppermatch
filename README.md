@@ -294,7 +294,7 @@ a per-shopper timeline and a **"✓ ISN ATTRIBUTED"** badge.
 
 1. Open **http://localhost:8000**, click **Open ISN Dashboard**, sign in (`admin@isn.com` / `isn-demo-2026`).
 2. Note the **Tracking** page baseline numbers (Sent / Delivered / Opened / Clicked / Accepted).
-3. Go to **Outreach**. Campaign = *Nike Mumbai Store Audit*, shopper = **Sarah Johnson** (pre-selected).
+3. Go to **Outreach**. Campaign = *MS Mumbai Store Audit*, shopper = **Sarah Johnson** (pre-selected).
 4. Click **Generate Invitation** → a unique tracking token, three URLs and an email preview appear.
 5. Click **Preview Email** to show the real invitation (the "View Assignment" button uses the tracking URL).
 6. Click **Simulate Email Open** → the event is written to the DB; the timeline gains *Email Opened*.

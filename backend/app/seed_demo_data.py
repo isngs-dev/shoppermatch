@@ -472,7 +472,7 @@ SKILL_POOL = [
     "Customer Interaction", "Data Accuracy", "Covert Observation", "Written Communication",
 ]
 CERT_POOL = ["Mystery Shopping Certified", "Retail Audit Certified", "Customer Experience Certified"]
-CLIENT_POOL = ["Nike", "Starbucks", "Croma", "Apple", "Adidas", "Reliance Digital", "McDonald's", "Amazon"]
+CLIENT_POOL = ["MS", "Starbucks", "Croma", "Apple", "Adidas", "Reliance Digital", "McDonald's", "Amazon"]
 
 # (name, city, gender, age, category_pair)
 SHOPPER_COHORT = [

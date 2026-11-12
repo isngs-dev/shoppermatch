@@ -1,5 +1,5 @@
 """Idempotent seed extension: populates the Social Media page (Posts,
-Connected Accounts) for the Nike demo client so it can be shown as a
+Connected Accounts) for the MS demo client so it can be shown as a
 working example instead of an empty state.
 
 Does NOT touch or delete any existing row — every record here is looked up
@@ -23,15 +23,15 @@ from .models import Campaign, Client, ClientSocialAccount, DistributionPost, Sho
 from .services.distribution import generate_post_image
 
 
-async def _get_nike(session) -> tuple[Client, Campaign, list[Shop]]:
-    client = (await session.execute(select(Client).where(Client.company_name == "Nike"))).scalar_one_or_none()
+async def _get_ms(session) -> tuple[Client, Campaign, list[Shop]]:
+    client = (await session.execute(select(Client).where(Client.company_name == "MS"))).scalar_one_or_none()
     if client is None:
-        raise RuntimeError("Nike client not found — run app.seed first")
+        raise RuntimeError("MS client not found — run app.seed first")
     campaign = (
-        await session.execute(select(Campaign).where(Campaign.name == "Nike New York Metro Store Audit"))
+        await session.execute(select(Campaign).where(Campaign.name == "MS New York Metro Store Audit"))
     ).scalar_one_or_none()
     if campaign is None:
-        raise RuntimeError("Nike New York Metro Store Audit campaign not found — run app.seed first")
+        raise RuntimeError("MS New York Metro Store Audit campaign not found — run app.seed first")
     shops = (await session.execute(select(Shop).where(Shop.campaign_id == campaign.id))).scalars().all()
     return client, campaign, shops
 
@@ -46,8 +46,8 @@ async def _build_accounts(session, client: Client) -> list[str]:
     }
     created = []
     for platform, account_name in [
-        ("facebook", "Nike US Retail Careers"),
-        ("instagram", "@nike.us.careers"),
+        ("facebook", "MS US Retail Careers"),
+        ("instagram", "@ms.us.careers"),
     ]:
         if platform in existing:
             continue
@@ -56,7 +56,7 @@ async def _build_accounts(session, client: Client) -> list[str]:
                 client_id=client.id,
                 platform=platform,
                 account_name=account_name,
-                connected_by="Nike Brand Team",
+                connected_by="MS Brand Team",
                 status="connected",
                 external_account_id=f"demo-{platform}-page-id",
             )
@@ -84,7 +84,7 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
             source_shop=shop,
             region=shop.city if shop else "Manhattan",
             destination_type="facebook",
-            destination_name="Nike US Retail Careers",
+            destination_name="MS US Retail Careers",
             target_kind="page",
             target_ref="demo-facebook-page-id",
             message=(
@@ -93,7 +93,7 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
                 "Apply now — spots are limited."
             ),
             status="posted",
-            posted_by="Nike Brand Team",
+            posted_by="MS Brand Team",
             posted_at=now - timedelta(days=4),
             external_post_id="demo-fb-post-1001",
         ),
@@ -103,12 +103,12 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
             source_type="campaign",
             region="New York",
             destination_type="instagram",
-            destination_name="@nike.us.careers",
+            destination_name="@ms.us.careers",
             target_kind="page",
             target_ref="demo-instagram-page-id",
-            message="Nike New York Metro Store Audit is live! Get paid to shop and share your experience. Sign up in bio.",
+            message="MS New York Metro Store Audit is live! Get paid to shop and share your experience. Sign up in bio.",
             status="posted",
-            posted_by="Nike Brand Team",
+            posted_by="MS Brand Team",
             posted_at=now - timedelta(days=2),
             external_post_id="demo-ig-post-1002",
         ),
@@ -119,7 +119,7 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
             source_shop=shop2,
             region=shop2.city if shop2 else "Brooklyn",
             destination_type="facebook",
-            destination_name="Nike US Retail Careers",
+            destination_name="MS US Retail Careers",
             target_kind="page",
             target_ref="demo-facebook-page-id",
             message=(
@@ -127,7 +127,7 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
                 "quick visit, real pay, flexible timing. Apply today!"
             ),
             status="scheduled",
-            posted_by="Nike Brand Team",
+            posted_by="MS Brand Team",
             scheduled_at=now + timedelta(days=1, hours=3),
             timezone="America/New_York",
         ),
@@ -137,12 +137,12 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
             source_type="campaign",
             region="Staten Island",
             destination_type="instagram",
-            destination_name="@nike.us.careers",
+            destination_name="@ms.us.careers",
             target_kind="page",
             target_ref="demo-instagram-page-id",
-            message="New opportunity on Staten Island! Join our mystery shopper program for Nike New York Metro Store Audit.",
+            message="New opportunity on Staten Island! Join our mystery shopper program for MS New York Metro Store Audit.",
             status="pending_approval",
-            posted_by="Nike Brand Team",
+            posted_by="MS Brand Team",
         ),
         # A Facebook Group post — always manual per Meta's API limits.
         DistributionPost(
@@ -155,7 +155,7 @@ async def _build_posts(session, campaign: Campaign, shops: list[Shop]) -> int:
             target_ref="https://facebook.com/groups/nyc-gig-workers-demo",
             message="Looking for mystery shoppers in New York — flexible hours, quick payout. DM for details.",
             status="manual_required",
-            posted_by="Nike Brand Team",
+            posted_by="MS Brand Team",
         ),
     ]
     session.add_all(posts)
@@ -187,7 +187,7 @@ async def _build_images(session, campaign: Campaign) -> int:
 async def run() -> None:
     await init_models()
     async with AsyncSessionLocal() as session:
-        client, campaign, shops = await _get_nike(session)
+        client, campaign, shops = await _get_ms(session)
         accounts_created = await _build_accounts(session, client)
         posts_created = await _build_posts(session, campaign, shops)
         await session.commit()

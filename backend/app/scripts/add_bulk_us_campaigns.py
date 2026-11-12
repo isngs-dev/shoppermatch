@@ -53,7 +53,7 @@ METROS: dict[str, dict] = {
 
 # The 3 flagship metros already have real per-locality coordinates in
 # app.seed — reuse them here too so a bulk campaign in New York/Chicago/LA
-# looks exactly as tight/precise on the map as Nike's own campaigns do.
+# looks exactly as tight/precise on the map as MS's own campaigns do.
 FLAGSHIP_METROS = {
     "New York": {"state": "NY", "localities": [(n, s, lat, lng) for n, s, lat, lng in NYC_LOCALITIES]},
     "Chicago": {"state": "IL", "localities": [(n, s, lat, lng) for n, s, lat, lng in CHI_LOCALITIES]},

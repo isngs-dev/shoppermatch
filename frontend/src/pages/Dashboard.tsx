@@ -221,7 +221,7 @@ function OperationsAssistantCard() {
       <div className="max-h-56 flex-1 space-y-3 overflow-y-auto pr-1">
         {history.length === 0 && (
           <p className="text-sm text-slate-400">
-            Say "Hey Assistant" to start, or ask: "How many clients do we have?", "What did Nike do?", "Which
+            Say "Hey Assistant" to start, or ask: "How many clients do we have?", "What did MS do?", "Which
             campaign needs attention?"
           </p>
         )}

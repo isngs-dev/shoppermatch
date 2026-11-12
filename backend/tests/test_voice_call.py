@@ -49,18 +49,18 @@ async def _admin_auth() -> dict:
         return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
-async def _nike_campaign_and_shop(auth: dict) -> tuple[dict, dict]:
+async def _ms_campaign_and_shop(auth: dict) -> tuple[dict, dict]:
     async with _client() as client:
-        # Several seeded campaigns now have "Nike" in their name (one per
+        # Several seeded campaigns now have "MS" in their name (one per
         # bucket — active/upcoming/completed) — outreach/voice-call actions
         # need the active one specifically, not just any name match.
-        nike = next(
+        ms = next(
             c
             for c in (await client.get("/api/campaigns", headers=auth)).json()["items"]
-            if "Nike" in c["name"] and c["status"] == "active"
+            if "MS" in c["name"] and c["status"] == "active"
         )
-        shop = (await client.get("/api/shops", params={"campaign_id": nike["id"]}, headers=auth)).json()["items"][0]
-        return nike, shop
+        shop = (await client.get("/api/shops", params={"campaign_id": ms["id"]}, headers=auth)).json()["items"][0]
+        return ms, shop
 
 
 async def _make_shopper(phone: str | None = "+15551234567") -> str:
@@ -133,7 +133,7 @@ async def _create_automation_with_no_response_state(
 async def test_scheduler_does_nothing_when_plivo_not_configured():
     await _fresh_db()
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     await _create_automation_with_no_response_state(auth, campaign, shop, shopper_id)
 
@@ -146,7 +146,7 @@ async def test_scheduler_places_call_when_due_and_configured(monkeypatch):
     await _fresh_db()
     _enable_plivo(monkeypatch)
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     automation_id, state_id = await _create_automation_with_no_response_state(auth, campaign, shop, shopper_id, delay_days=0)
 
@@ -177,7 +177,7 @@ async def test_scheduler_skips_state_before_delay_elapses(monkeypatch):
     await _fresh_db()
     _enable_plivo(monkeypatch)
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     # delay_days=5 but last_event_at backdated only by the (delay_days=0)
     # helper default — simulate "just went terminal" by NOT backdating.
@@ -202,7 +202,7 @@ async def test_missing_phone_number_fails_without_retry(monkeypatch):
     await _fresh_db()
     _enable_plivo(monkeypatch)
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper(phone=None)
     automation_id, state_id = await _create_automation_with_no_response_state(auth, campaign, shop, shopper_id)
 
@@ -223,7 +223,7 @@ async def test_daily_call_cap_is_enforced(monkeypatch):
     _enable_plivo(monkeypatch)
     monkeypatch.setattr(settings, "voice_call_daily_limit", 1)
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
 
     shopper_a = await _make_shopper()
     shopper_b = await _make_shopper()
@@ -248,7 +248,7 @@ async def test_call_initiation_failure_schedules_retry_then_fails(monkeypatch):
     await _fresh_db()
     _enable_plivo(monkeypatch)
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     automation_id, state_id = await _create_automation_with_no_response_state(
         auth, campaign, shop, shopper_id, max_attempts=2, retry_gap_days=3
@@ -288,7 +288,7 @@ async def test_answer_endpoint_returns_greeting(monkeypatch):
     monkeypatch.setattr(settings, "plivo_auth_token", None)
     await _fresh_db()
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     automation_id, state_id = await _create_automation_with_no_response_state(auth, campaign, shop, shopper_id)
 
@@ -304,7 +304,7 @@ async def test_answer_rejects_bad_signature_when_configured(monkeypatch):
     await _fresh_db()
     monkeypatch.setattr(settings, "plivo_auth_token", "real-secret")
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     _, state_id = await _create_automation_with_no_response_state(auth, campaign, shop, shopper_id)
 
@@ -327,7 +327,7 @@ async def test_gather_endpoint_concludes_call_on_outcome(monkeypatch):
     monkeypatch.setattr(settings, "plivo_auth_token", None)
     await _fresh_db()
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     automation_id, state_id = await _create_automation_with_no_response_state(auth, campaign, shop, shopper_id)
 
@@ -362,7 +362,7 @@ async def test_gather_endpoint_continues_conversation_without_outcome(monkeypatc
     monkeypatch.setattr(settings, "plivo_auth_token", None)
     await _fresh_db()
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     automation_id, state_id = await _create_automation_with_no_response_state(auth, campaign, shop, shopper_id)
 
@@ -398,7 +398,7 @@ async def test_status_callback_no_answer_schedules_retry(monkeypatch):
     monkeypatch.setattr(settings, "plivo_auth_token", None)
     await _fresh_db()
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     automation_id, state_id = await _create_automation_with_no_response_state(
         auth, campaign, shop, shopper_id, max_attempts=2, retry_gap_days=3
@@ -427,7 +427,7 @@ async def test_status_callback_never_overwrites_a_concluded_outcome(monkeypatch)
     monkeypatch.setattr(settings, "plivo_auth_token", None)
     await _fresh_db()
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     automation_id, state_id = await _create_automation_with_no_response_state(auth, campaign, shop, shopper_id)
     async with AsyncSessionLocal() as session:

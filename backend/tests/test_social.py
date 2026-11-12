@@ -38,10 +38,10 @@ def _client() -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver", follow_redirects=False)
 
 
-async def _nike_client_auth() -> dict:
+async def _ms_client_auth() -> dict:
     async with _client() as client:
         r = await client.post(
-            "/api/auth/login", json={"email": "client@nike-demo.example", "password": "client-demo-2026"}
+            "/api/auth/login", json={"email": "client@ms-demo.example", "password": "client-demo-2026"}
         )
         assert r.status_code == 200, r.text
         return {"Authorization": f"Bearer {r.json()['access_token']}"}
@@ -67,10 +67,10 @@ async def _second_client_auth() -> dict:
         return {"Authorization": f"Bearer {token}"}
 
 
-async def _nike_campaign(auth: dict) -> dict:
+async def _ms_campaign(auth: dict) -> dict:
     async with _client() as client:
         r = await client.get("/api/campaigns", headers=auth)
-        return next(c for c in r.json()["items"] if "Nike" in c["name"])
+        return next(c for c in r.json()["items"] if "MS" in c["name"])
 
 
 # --------------------------------------------------------------------------- #
@@ -79,7 +79,7 @@ async def _nike_campaign(auth: dict) -> dict:
 @pytest.mark.asyncio
 async def test_facebook_status_reports_not_configured_by_default():
     await _fresh_db()
-    auth = await _nike_client_auth()
+    auth = await _ms_client_auth()
     async with _client() as client:
         r = await client.get("/api/social/facebook/status", headers=auth)
         assert r.status_code == 200
@@ -89,7 +89,7 @@ async def test_facebook_status_reports_not_configured_by_default():
 @pytest.mark.asyncio
 async def test_facebook_connect_requires_configuration():
     await _fresh_db()
-    auth = await _nike_client_auth()
+    auth = await _ms_client_auth()
     async with _client() as client:
         r = await client.get("/api/social/facebook/connect", headers=auth)
         assert r.status_code == 503
@@ -105,7 +105,7 @@ async def test_facebook_oauth_full_flow_with_mocked_graph_api(monkeypatch):
     monkeypatch.setattr(settings, "facebook_app_secret", "test-app-secret")
     monkeypatch.setattr(settings, "facebook_redirect_uri", "http://testserver/api/social/facebook/callback")
 
-    auth = await _nike_client_auth()
+    auth = await _ms_client_auth()
     async with _client() as client:
         me = await client.get("/api/auth/me", headers=auth)
         client_id = me.json()["client_id"]
@@ -121,7 +121,7 @@ async def test_facebook_oauth_full_flow_with_mocked_graph_api(monkeypatch):
 
         async def fake_exchange(code: str):
             assert code == "fake-code"
-            return [{"id": "1234567890", "name": "Nike Test Page", "access_token": "fake-page-token", "category": "Retail"}]
+            return [{"id": "1234567890", "name": "MS Test Page", "access_token": "fake-page-token", "category": "Retail"}]
 
         monkeypatch.setattr(facebook_oauth, "exchange_code_for_pages", fake_exchange)
 
@@ -134,7 +134,7 @@ async def test_facebook_oauth_full_flow_with_mocked_graph_api(monkeypatch):
         pending = await client.get(f"/api/social/facebook/pending/{pending_id}", headers=auth)
         assert pending.status_code == 200
         pages = pending.json()["pages"]
-        assert pages == [{"id": "1234567890", "name": "Nike Test Page", "category": "Retail"}]
+        assert pages == [{"id": "1234567890", "name": "MS Test Page", "category": "Retail"}]
 
         selected = await client.post(
             "/api/social/facebook/select-page",
@@ -142,7 +142,7 @@ async def test_facebook_oauth_full_flow_with_mocked_graph_api(monkeypatch):
             json={"pending_id": pending_id, "page_id": "1234567890"},
         )
         assert selected.status_code == 200, selected.text
-        assert selected.json()["account_name"] == "Nike Test Page"
+        assert selected.json()["account_name"] == "MS Test Page"
 
     async with AsyncSessionLocal() as session:
         from sqlalchemy import select
@@ -190,9 +190,9 @@ async def _connected_facebook_account(client_id: str, *, with_token: bool = True
 @pytest.mark.asyncio
 async def test_create_draft_and_permission_isolation():
     await _fresh_db()
-    auth = await _nike_client_auth()
+    auth = await _ms_client_auth()
     other_auth = await _second_client_auth()
-    campaign = await _nike_campaign(auth)
+    campaign = await _ms_campaign(auth)
 
     async with _client() as client:
         create = await client.post(
@@ -230,8 +230,8 @@ async def test_create_draft_and_permission_isolation():
 @pytest.mark.asyncio
 async def test_scheduling_requires_a_connected_account_with_a_token():
     await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
+    auth = await _ms_client_auth()
+    campaign = await _ms_campaign(auth)
 
     async with _client() as client:
         create = await client.post(
@@ -256,8 +256,8 @@ async def test_scheduling_requires_a_connected_account_with_a_token():
 @pytest.mark.asyncio
 async def test_group_target_never_schedulable_and_uses_manual_workflow():
     await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
+    auth = await _ms_client_auth()
+    campaign = await _ms_campaign(auth)
 
     async with _client() as client:
         create = await client.post(
@@ -297,8 +297,8 @@ async def test_group_target_never_schedulable_and_uses_manual_workflow():
 @pytest.mark.asyncio
 async def test_publish_now_success_records_external_post_id_and_log(monkeypatch):
     await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
+    auth = await _ms_client_auth()
+    campaign = await _ms_campaign(auth)
     me_client_id = None
 
     async with _client() as client:
@@ -344,8 +344,8 @@ async def test_scheduled_publish_retries_then_fails_after_max_attempts(monkeypat
     retrying forever and never silently marked posted."""
     await _fresh_db()
     monkeypatch.setattr(settings, "social_publisher_max_attempts", 2)
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
+    auth = await _ms_client_auth()
+    campaign = await _ms_campaign(auth)
 
     async with _client() as client:
         me = (await client.get("/api/auth/me", headers=auth)).json()
@@ -398,8 +398,8 @@ async def test_scheduled_publish_retries_then_fails_after_max_attempts(monkeypat
 @pytest.mark.asyncio
 async def test_auth_error_flips_account_to_expired_instead_of_retrying(monkeypatch):
     await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
+    auth = await _ms_client_auth()
+    campaign = await _ms_campaign(auth)
 
     async with _client() as client:
         me = (await client.get("/api/auth/me", headers=auth)).json()
@@ -428,8 +428,8 @@ async def test_idempotent_claim_prevents_double_publish():
     """The actual double-publish guard: two concurrent attempts to claim the
     same post for publishing must never both succeed."""
     await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
+    auth = await _ms_client_auth()
+    campaign = await _ms_campaign(auth)
 
     async with _client() as client:
         me = (await client.get("/api/auth/me", headers=auth)).json()
@@ -452,8 +452,8 @@ async def test_idempotent_claim_prevents_double_publish():
 @pytest.mark.asyncio
 async def test_publish_fails_cleanly_with_no_connected_account():
     await _fresh_db()
-    auth = await _nike_client_auth()
-    campaign = await _nike_campaign(auth)
+    auth = await _ms_client_auth()
+    campaign = await _ms_campaign(auth)
 
     async with _client() as client:
         create = await client.post(

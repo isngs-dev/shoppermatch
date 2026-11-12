@@ -1364,7 +1364,7 @@ export function BulkVoiceCallPanel() {
             <label className="label">Opening script (optional — leave blank for the default)</label>
             <textarea
               className="input h-40 resize-none"
-              placeholder="Hi {first_name}, this is Nike calling about a mystery shopping opportunity..."
+              placeholder="Hi {first_name}, this is MS calling about a mystery shopping opportunity..."
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               maxLength={1000}

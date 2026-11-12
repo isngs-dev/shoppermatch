@@ -1,4 +1,4 @@
-"""One-off idempotent data script: adds more Nike campaigns spanning
+"""One-off idempotent data script: adds more MS campaigns spanning
 active/upcoming/completed buckets so the Client Portal's multi-select bulk
 actions (start automation / change status / export report) have real data
 to operate on in every tab. Safe to re-run — skipped if a campaign with the
@@ -6,7 +6,7 @@ same name already exists.
 
 Run:
     cd backend
-    .venv/Scripts/python.exe -m app.scripts.add_nike_campaigns
+    .venv/Scripts/python.exe -m app.scripts.add_ms_campaigns
 """
 from __future__ import annotations
 
@@ -67,23 +67,23 @@ NOW = datetime.now(timezone.utc)
 CAMPAIGN_DEFS = [
     # (name, status, description, deadline_offset_days, shop city list, completed_ratio)
     (
-        "Nike Delhi Flagship Audit",
+        "MS Delhi Flagship Audit",
         "active",
-        "Retail experience & compliance audit across Nike flagship stores in Delhi NCR.",
+        "Retail experience & compliance audit across MS flagship stores in Delhi NCR.",
         20,
         ["Delhi", "Delhi"],
         0.5,
     ),
     (
-        "Nike Bangalore Launch Audit",
+        "MS Bangalore Launch Audit",
         "upcoming",
-        "New-store launch readiness audit for Nike's Bangalore expansion.",
+        "New-store launch readiness audit for MS's Bangalore expansion.",
         35,
         ["Bangalore", "Bangalore"],
         0.0,
     ),
     (
-        "Nike Winter Collection Preview",
+        "MS Winter Collection Preview",
         "upcoming",
         "Pre-launch mystery shop of the winter collection rollout across Maharashtra stores.",
         45,
@@ -91,7 +91,7 @@ CAMPAIGN_DEFS = [
         0.0,
     ),
     (
-        "Nike Republic Day Sale Audit",
+        "MS Republic Day Sale Audit",
         "completed",
         "Post-event audit of the Republic Day promotional sale execution.",
         -10,
@@ -99,7 +99,7 @@ CAMPAIGN_DEFS = [
         1.0,
     ),
     (
-        "Nike Diwali Footfall Audit",
+        "MS Diwali Footfall Audit",
         "completed",
         "Customer experience audit during the Diwali shopping season.",
         -30,
@@ -111,9 +111,9 @@ CAMPAIGN_DEFS = [
 
 async def _build() -> int:
     async with AsyncSessionLocal() as session:
-        nike = (await session.execute(select(Client).where(Client.company_name == "Nike"))).scalar_one_or_none()
-        if nike is None:
-            print("Nike client not found — aborting.")
+        ms = (await session.execute(select(Client).where(Client.company_name == "MS"))).scalar_one_or_none()
+        if ms is None:
+            print("MS client not found — aborting.")
             return 0
 
         created = 0
@@ -125,8 +125,8 @@ async def _build() -> int:
 
             campaign = Campaign(
                 name=name,
-                client_name="Nike",
-                client_id=nike.id,
+                client_name="MS",
+                client_id=ms.id,
                 description=description,
                 status=status,
                 deadline=NOW + timedelta(days=deadline_offset),
@@ -138,7 +138,7 @@ async def _build() -> int:
             visit_start = NOW + timedelta(days=deadline_offset - 5)
             visit_end = NOW + timedelta(days=deadline_offset)
             shops = [
-                make_shop(campaign, f"Nike {city} — Store #{i + 1}", city, rnd.choice([1300, 1400, 1500, 1600]), (visit_start, visit_end))
+                make_shop(campaign, f"MS {city} — Store #{i + 1}", city, rnd.choice([1300, 1400, 1500, 1600]), (visit_start, visit_end))
                 for i, city in enumerate(cities)
             ]
             session.add_all(shops)

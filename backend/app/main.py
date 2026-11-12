@@ -49,6 +49,7 @@ from .routers import (
 from .seed import maybe_seed
 from .services.automation import ensure_default_templates, run_automation_scheduler
 from .services.autopilot import run_autopilot_scheduler
+from .services.demo_rename import rename_demo_client
 from .services.outbox import reset_stuck_jobs, run_outbox_worker
 from .services.social_publisher import run_social_publisher
 from .services.chatbot.followups import run_followup_worker
@@ -79,6 +80,8 @@ async def lifespan(app: FastAPI):
         print(f"Requeued {requeued} email job(s) stuck in 'sending' from a previous run.")
     async with AsyncSessionLocal() as session:
         await ensure_default_templates(session)
+        # Databases seeded before the demo client "Nike" became "MS" are renamed once, here.
+        await rename_demo_client(session)
         await session.commit()
     worker = asyncio.create_task(run_outbox_worker(), name="shoppermatch-email-outbox")
     automation_worker = asyncio.create_task(run_automation_scheduler(), name="shoppermatch-automation-scheduler")

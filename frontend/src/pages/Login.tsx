@@ -39,7 +39,7 @@ export function Login() {
       setEmail("admin@isn.com");
       setPassword("isn-demo-2026");
     } else {
-      setEmail("client@nike-demo.example");
+      setEmail("client@ms-demo.example");
       setPassword("client-demo-2026");
     }
   }
@@ -107,7 +107,7 @@ export function Login() {
               <span className="text-brand-600">Use</span>
             </button>
             <button type="button" className="flex w-full items-center justify-between rounded-md px-1.5 py-1 text-left hover:bg-white dark:hover:bg-slate-900" onClick={() => fillDemo("client")}>
-              <span>Nike Client — client@nike-demo.example / client-demo-2026</span>
+              <span>MS Client — client@ms-demo.example / client-demo-2026</span>
               <span className="text-brand-600">Use</span>
             </button>
           </div>

@@ -15,7 +15,7 @@ just this one.
 
 Run:
     python -m app.scripts.assign_call_contacts_to_shoppers
-    python -m app.scripts.assign_call_contacts_to_shoppers --campaign "Nike New York Metro Store Audit"
+    python -m app.scripts.assign_call_contacts_to_shoppers --campaign "MS New York Metro Store Audit"
 """
 from __future__ import annotations
 

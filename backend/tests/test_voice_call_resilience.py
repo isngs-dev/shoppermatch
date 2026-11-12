@@ -26,7 +26,7 @@ from test_voice_call import (  # noqa: E402  (tests/ is on sys.path in pytest's 
     _create_automation_with_no_response_state,
     _fresh_db,
     _make_shopper,
-    _nike_campaign_and_shop,
+    _ms_campaign_and_shop,
 )
 
 
@@ -136,7 +136,7 @@ async def test_shopper_call_gather_also_survives_silence_and_ai_failure(monkeypa
     monkeypatch.setattr(vc_router, "AI_TURN_TIMEOUT_SECONDS", 0.05)
     await _fresh_db()
     auth = await _admin_auth()
-    campaign, shop = await _nike_campaign_and_shop(auth)
+    campaign, shop = await _ms_campaign_and_shop(auth)
     shopper_id = await _make_shopper()
     _, state_id = await _create_automation_with_no_response_state(auth, campaign, shop, shopper_id)
     async with AsyncSessionLocal() as session:
