@@ -14,10 +14,10 @@ Campaigns is split into three buckets. Active are live campaigns (including in p
 Overview shows the campaign description, client, status, created date, deadline and Total shops with how many are completed and remaining, plus the outreach funnel and the number of declined responses. EXPORT PDF, EXPORT XLSX and EXPORT CSV buttons download a campaign report. The cards above the tabs show Total shops, Completed, Remaining, Progress and Invitations.
 
 ## Campaign Map tab
-The Map shows every shop of the campaign on a live map that refreshes about every 10 seconds. A shop marker is green for healthy coverage, amber for medium and red for low coverage. Around each shop the top AI-matched shoppers are shown as purple dots (best three) and grey dots (other eligible shoppers). Hover a marker to see its details without clicking; click a shop marker for a popup with a View Shop button.
+The Map shows every shop of the campaign on a live map that refreshes about every 10 seconds. A shop marker is green for healthy coverage (every shopper the shop needs has accepted or been emailed an invitation), orange for medium (at least half) and red for low coverage (under half; invitations that are only drafted do not count). Around each shop the top AI-matched shoppers are shown as purple dots (best three) and grey dots (other eligible shoppers). Hover a marker to see its details without clicking; click a shop marker for a popup with a View Shop button.
 
 ## Campaign Shops tab
-Shops lists every shop with its location, required shoppers, how many are invited and its coverage (healthy, medium or low). Open a shop for its detail drawer, which includes the shop's recommended shoppers and a link to AI Recommendations for that shop.
+Shops lists every shop with its location, required shoppers, how many are invited and its coverage (healthy, medium or low, counted on shoppers who accepted or were emailed). Open a shop for its detail drawer, which includes the shop's recommended shoppers and a link to AI Recommendations for that shop.
 
 ## Campaign Shoppers tab
 Shoppers lists the shoppers invited for this campaign with their response and status. Client users see aggregate counts and not personal contact details; admins can open full profiles.

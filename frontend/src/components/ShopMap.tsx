@@ -100,6 +100,9 @@ function ShopInfo({ s }: { s: any }) {
           Invited: <span className="font-semibold">{s.invited_shoppers}</span>
         </div>
         <div>
+          Reached: <span className="font-semibold">{s.reached_shoppers}</span>
+        </div>
+        <div>
           Accepted: <span className="font-semibold">{s.accepted_shoppers}</span>
         </div>
       </div>
@@ -189,6 +192,10 @@ export function CampaignMapTab({
         <LegendDot color={COVERAGE_HEX.low} label="Low coverage" />
         <LegendDot color="#6366f1" label="Top-matched shopper" />
         <LegendDot color="#94a3b8" label="Other eligible shopper" />
+        <span className="basis-full text-[11px] text-slate-400">
+          Shop colour = shoppers reached (accepted or emailed an invitation) against what the shop needs: green all, orange at
+          least half, red under half.
+        </span>
         {items.length > located.length && (
           <span className="text-amber-600 dark:text-amber-400">
             {items.length - located.length} shop(s) missing coordinates — not shown on map

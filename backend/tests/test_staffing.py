@@ -248,3 +248,59 @@ async def test_auto_assign_fills_a_shop_once_its_radius_is_widened():
         ).json()
         assert [p for p in widened["proposals"] if p["shop_id"] == shop["id"]]
         assert {p["shop_id"] for p in widened["proposals"]} == {shop["id"]}
+
+
+def test_coverage_counts_shoppers_actually_reached_not_drafted_invitations():
+    from app.services.staffing import coverage_tier
+
+    assert coverage_tier(3, 3) == "healthy" and coverage_tier(3, 5) == "healthy"
+    assert coverage_tier(4, 2) == "medium" and coverage_tier(3, 2) == "medium"
+    assert coverage_tier(3, 1) == "low" and coverage_tier(3, 0) == "low"
+    assert coverage_tier(0, 0) == "low" and coverage_tier(None, 4) == "low"
+
+
+@pytest.mark.asyncio
+async def test_a_shop_only_has_coverage_once_its_invitations_are_actually_sent():
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from app.database import AsyncSessionLocal
+    from app.models import Invitation
+
+    await _fresh_db()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        auth = await _login(client)
+        campaign, shop = await _untouched_open_shop(client, auth)
+        cid, sid = campaign["id"], shop["id"]
+
+        async def row():
+            items = (await client.get(f"/api/campaigns/{cid}/map", headers=auth)).json()["items"]
+            return next(i for i in items if i["id"] == sid)
+
+        before = await row()
+        assert before["coverage"] == "low" and before["reached_shoppers"] == 0
+
+        # Draft invitations for everything the shop needs (created, not emailed): still Low.
+        recs = (await client.get(f"/api/campaigns/{cid}/shops/{sid}/recommendations", params={"limit": 20}, headers=auth)).json()
+        picks = [r["shopper_id"] for r in recs["recommendations"] if r["recommended"]]
+        assert picks
+        ok = await client.post(f"/api/campaigns/{cid}/shops/{sid}/recommendations/approve", headers=auth, json={"shopper_ids": picks})
+        assert ok.status_code == 200, ok.text
+        drafted = await row()
+        assert drafted["invited_shoppers"] == len(picks) and drafted["reached_shoppers"] == 0 and drafted["coverage"] == "low"
+
+        # Once they are emailed they count, and the shop turns Healthy.
+        async with AsyncSessionLocal() as s:
+            for inv in (await s.execute(select(Invitation).where(Invitation.shop_id == uuid_of(sid)))).scalars():
+                inv.sent_at = datetime.now(timezone.utc)
+            await s.commit()
+        sent = await row()
+        assert sent["reached_shoppers"] == len(picks)
+        assert sent["coverage"] == ("healthy" if len(picks) >= shop["required_shoppers"] else "medium")
+
+
+def uuid_of(value: str):
+    import uuid
+
+    return uuid.UUID(value)

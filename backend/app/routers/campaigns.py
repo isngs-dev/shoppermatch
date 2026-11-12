@@ -24,7 +24,7 @@ from ..services.audit import record_audit
 from ..services.distribution import DESTINATION_TYPES, destination_name, generate_post_image, regions_for_shops
 from ..services.selection import active_invitation_count, active_shopper_ids, enforce_over_selection, mark_recommended
 from ..services.semantic_matching import MATCHING_WEIGHTS, run_matching
-from ..services.staffing import assess_staffing
+from ..services.staffing import assess_staffing, coverage_tier
 from ..services.staffing import effective_radius as radius_with_bonus
 from ..services.tenancy import enforce_campaign_access
 from ..services.tracking import add_event
@@ -75,6 +75,21 @@ async def _campaign_outreach(session: AsyncSession, campaign_id) -> dict:
     }
 
 
+async def _reached_by_shop(session: AsyncSession, campaign_id) -> dict:
+    """Per shop: shoppers who accepted or were emailed an invitation (and haven't declined) — what coverage is
+    measured on (services/staffing.py::coverage_tier)."""
+    rows = await session.execute(
+        select(Invitation.shop_id, func.count(Invitation.id))
+        .where(
+            Invitation.campaign_id == campaign_id,
+            func.coalesce(Invitation.response, "") != "declined",
+            (Invitation.sent_at.isnot(None)) | (Invitation.response == "accepted"),
+        )
+        .group_by(Invitation.shop_id)
+    )
+    return dict(rows.all())
+
+
 async def _campaign_shops_with_coverage(session: AsyncSession, campaign_id) -> list[dict]:
     shops = (
         await session.execute(select(Shop).where(Shop.campaign_id == campaign_id))
@@ -102,15 +117,16 @@ async def _campaign_shops_with_coverage(session: AsyncSession, campaign_id) -> l
         await session.execute(select(ShopBonus).where(ShopBonus.campaign_id == campaign_id))
     ).scalars().all()
     bonus_by_shop = {b.shop_id: b for b in bonus_rows}
+    reached = await _reached_by_shop(session, campaign_id)
     items = []
     for s in shops:
         d = shop_out(s, bonus=bonus_by_shop.get(s.id))
         invited = int(counts.get(s.id, 0))
-        ratio = (invited / s.required_shoppers) if s.required_shoppers else 0
         d["invited_shoppers"] = invited
+        d["reached_shoppers"] = int(reached.get(s.id, 0))
         d["selected_shoppers"] = int(selected.get(s.id, 0))
         d["open_slots"] = max(0, (s.required_shoppers or 0) - d["selected_shoppers"])
-        d["coverage"] = "healthy" if ratio >= 1 else ("medium" if ratio >= 0.5 else "low")
+        d["coverage"] = coverage_tier(s.required_shoppers, d["reached_shoppers"])
         items.append(d)
     return items
 
@@ -269,15 +285,16 @@ async def campaign_map(
         ).all()
     )
 
+    reached = await _reached_by_shop(session, campaign_id)
     items = []
     for s in shops:
         d = shop_out(s)
         invited = int(invited_counts.get(s.id, 0))
         accepted = int(accepted_counts.get(s.id, 0))
-        ratio = (invited / s.required_shoppers) if s.required_shoppers else 0
         d["invited_shoppers"] = invited
         d["accepted_shoppers"] = accepted
-        d["coverage"] = "healthy" if ratio >= 1 else ("medium" if ratio >= 0.5 else "low")
+        d["reached_shoppers"] = int(reached.get(s.id, 0))
+        d["coverage"] = coverage_tier(s.required_shoppers, d["reached_shoppers"])
         d["available_shoppers"] = run_matching(shoppers, s, campaign)["eligible_count"]
         items.append(d)
 
@@ -463,8 +480,8 @@ async def campaign_insights(
                     "severity": "warning",
                     "title": f"{s['shop_name']} has insufficient shopper coverage",
                     "message": (
-                        f"Only {s['invited_shoppers']} of {s['required_shoppers']} required "
-                        f"shoppers have been invited. Consider expanding the search radius or "
+                        f"Only {s['reached_shoppers']} of {s['required_shoppers']} required "
+                        f"shoppers have accepted or been emailed an invitation. Consider expanding the search radius or "
                         f"recruiting more shoppers for {s['shop_name']}."
                     ),
                 }

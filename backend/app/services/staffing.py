@@ -33,6 +33,17 @@ BONUS_CEILING_X_PAY = 3
 DEFAULT_PAY = 40
 
 
+def coverage_tier(required: int | None, reached: int) -> str:
+    """Shop coverage for the map, the shop list and the insights, by how many of the shoppers it needs have actually
+    been reached: accepted, or emailed an invitation and not declined. An invitation that is only created (not yet
+    sent) doesn't count, so a shop nobody has been contacted about is Low however many invitations are drafted.
+    Healthy = all required reached, Medium = at least half, Low = under half."""
+    if not required:
+        return "low"
+    ratio = reached / required
+    return "healthy" if ratio >= 1 else ("medium" if ratio >= 0.5 else "low")
+
+
 def _round5(n: float) -> int:
     return int(round(n / 5.0)) * 5
 

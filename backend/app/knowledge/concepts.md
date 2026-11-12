@@ -20,7 +20,7 @@ Every invitation has a random unguessable UUID token. The email's tracking pixel
 Sent, Delivered, Opened, Clicked, Accepted. Opened means the email's tracking image loaded, which is approximate because some email apps block or prefetch images. Clicked means the link was followed and is the more reliable signal. Visited means the assignment page loaded. Accepted and Declined are the shopper's own response.
 
 ## Coverage
-Coverage tells how well a shop is staffed. Healthy means the required number of shoppers is invited, Medium means at least half, Low means less than half. It is shown as green, amber and red on the campaign map.
+Coverage tells how well a shop is staffed, counting the shoppers who have actually been reached: they accepted, or an invitation email was sent to them and they have not declined. An invitation that is only drafted (created but not emailed yet) does not count. Healthy means all the shoppers the shop needs have been reached, Medium at least half, Low under half. It is shown as green, orange and red shop markers on the campaign map and as the coverage badge in the Shops tab.
 
 ## Required shoppers and open slots
 Each shop needs a number of shoppers. Selected counts invitations still in play (a decline frees the slot). Open slots are required minus selected, and the AI recommends exactly that many.
